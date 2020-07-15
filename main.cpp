@@ -4,13 +4,21 @@
 
 // --use_fast_math 
 
+#pragma warning(disable:4996)
+#pragma warning(disable:26440)
+#pragma warning(disable:26496)
+#pragma warning(disable:26493)
+#pragma warning(disable:26812)
+#pragma warning(disable:26497)
+#pragma warning(disable:26481)
+
+
 #include <iostream>
 using namespace std;
 
 #define WINDOWS_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#pragma warning(disable:4996)
 
 // OpenGL Graphics includes
 #include <helper_gl.h>
@@ -26,11 +34,12 @@ using namespace std;
 #include <rendercheck_gl.h>
 
 #include <time.h>
-#include <structs.h>
+//#include <structs.h>
+#include <scene.h>
 
 // Shared Library Test Functions
 #define MAX_EPSILON 10
-#define REFRESH_DELAY 10 //ms
+#define REFRESH_DELAY 500 //ms
 
 const char *sSDKname = "simpleCUDA2GL";
 
@@ -39,7 +48,7 @@ unsigned int g_TotalErrors = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 // constants / global variables
-int factor = 1;
+int factor = 5;
 int window_factor = 1;
 int width = 1280;
 int height = 720;
@@ -47,60 +56,11 @@ unsigned int window_width = width * window_factor;
 unsigned int window_height = height * window_factor;
 unsigned int image_width = width * factor;
 unsigned int image_height = height * factor;
-int iGLUTWindowHandle = 0;          // handle to the GLUT window
+int iGLUTWindowHandle = 0;  // handle to the GLUT window
 
-// miki
-float3 sunPos = { -1, -1, -1 };
-float3 spherePos = { 0, 0, -1 };
-float moveDelta = 0.5f;
-
-// Globals
-float alpha = 180;
-float alphaDelta = 1;
-
-const int SPHERE_NUMBER = 10;
-sphere *positions;
-
-void initSpheres() {
-    for (int i = 0; i < SPHERE_NUMBER; i++) {
-        positions[i].x = rand() % 6 - 3;
-        positions[i].y = rand() % 3 - 1;
-        positions[i].z = -rand() % 4 - 2;
-
-        rgb c = hsv2rgb({ (double)(rand() % 360), 0.9, 0.9 });
-        positions[i].r = c.r * 255;
-        positions[i].g = c.g * 255;
-        positions[i].b = c.b * 255;
-    }
-}
-
-void initScene() {
-    // create spheres
-    srand(time(NULL));
-
-    positions = (sphere*) malloc(sizeof(sphere) * SPHERE_NUMBER);
-
-    initSpheres();
-    getLastCudaError("ERROR MAIN MAIN\n");
-}
-
-
-void animate() {
-
-    // spin
-
-    const float a = (3.14 / 180.0) * alpha;
-    sunPos.x = sin(a);
-    sunPos.z = cos(a);
-    alpha = fmod(alpha + alphaDelta, 360.0);
-
-    // W S
-    int yMove = (bool)GetAsyncKeyState(0x57) - (bool)GetAsyncKeyState(0x53);
-    // A D
-    int xMove = (bool)GetAsyncKeyState(0x44) - (bool)GetAsyncKeyState(0x41);
-    // zoom
-    int zZoom = (bool)GetAsyncKeyState(0x51) - (bool)GetAsyncKeyState(0x45);
-}
+// delta time
+int timeStart = 0;
+float deltaTime = 1;
 
 // pbo and fbo variables
 GLuint pbo_dest;
@@ -133,11 +93,6 @@ StopWatchInterface *timer = NULL;
 GLuint shDraw;
 
 ////////////////////////////////////////////////////////////////////////////////
-extern "C" void
-launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
-                   unsigned int *g_odata,
-                   int imgw, int imgh,
-                   float3 pos, float3 sun, sphere *positions, int n);
 
 // Forward declarations
 void runStdProgram(int argc, char **argv);
@@ -235,7 +190,7 @@ void generateCUDAImage()
     // execute CUDA kernel
     
 
-    launch_cudaProcess(grid, block, 0, out_data, image_width, image_height, spherePos, sunPos, positions, SPHERE_NUMBER);
+    launch(grid, block, out_data, image_width, image_height);
 
 
     // CUDA generated data in cuda memory or in a mapped PBO made of BGRA 8 bits
@@ -318,33 +273,50 @@ void display()
     // flip backbuffer
     glutSwapBuffers();
 
-    // Update fps counter, fps/title display and log
-    //if (++fpsCount == fpsLimit)
-    {
-        char cTitle[256];
-        float fps = 1000.0f / sdkGetAverageTimerValue(&timer);
-        sprintf(cTitle, "Raytracing (%d x %d): %.1f fps", window_width, window_height, fps);
-        glutSetWindowTitle(cTitle);
-        //printf("%s\n", cTitle);
-        fpsCount = 0;
-        fpsLimit = (int)((fps > 1.0f) ? fps : 1.0f);
-        sdkResetTimer(&timer);
-    }
 }
 
 // miki
 void timerEvent(int value)
 {
-    animate();
-    glutPostRedisplay();
+    // Update fps
+    char cTitle[256];
+    sprintf(cTitle, "Raytracing (%d x %d): %.1f fps", window_width, window_height, 1 / deltaTime);
+    glutSetWindowTitle(cTitle);
     glutTimerFunc(REFRESH_DELAY, timerEvent, 0);
 }
 
+void mouseInput() {
+    POINT pos;
+    GetCursorPos(&pos);
+    int x = pos.x;
+    int y = pos.y;
+    int wx = glutGet(GLUT_WINDOW_X);
+    int wy = glutGet(GLUT_WINDOW_Y);
+
+    int w = window_width;
+    int h = window_height;
+
+    mouseMotion(x - wx, y - wy, w, h);
+
+    glutWarpPointer(w / 2, h / 2);
+}
+
+void updateDelta() {
+    int realTimeStart = glutGet(GLUT_ELAPSED_TIME);
+    deltaTime = (realTimeStart - timeStart) * 1.0 / 1000.0;
+    timeStart = realTimeStart;
+}
+
 void idle() {
+    // calc delta time
+    updateDelta();
+
+    mouseInput();
     animate();
     glutPostRedisplay();
 }
 
+void createTextureDst(GLuint* tex_cudaResult, unsigned int size_x, unsigned int size_y);
 ////////////////////////////////////////////////////////////////////////////////
 //! Keyboard events handler
 ////////////////////////////////////////////////////////////////////////////////
@@ -352,59 +324,26 @@ void keyboard(unsigned char key, int /*x*/, int /*y*/)
 {
     switch (key)
     {
-        case 'a':
-            spherePos.x -= moveDelta;
-            break;
-        case 'd':
-            spherePos.x += moveDelta;
-            break;
-        case 'w':
-            spherePos.y += moveDelta;
-            break;
-        case 's':
-            spherePos.y -= moveDelta;
-            break;
-        case 'q':
-            spherePos.z += moveDelta;
-            break;
-        case 'e':
-            spherePos.z -= moveDelta;
-            break;
-        case 'r': 
-            initSpheres();
-            break;
         case 'f':
             glutFullScreen();
+            //initGLBuffers();
             break;
         case (27) :
             Cleanup(EXIT_SUCCESS);
             break;
-
-        case ' ':
-            enable_cuda ^= 1;
-#ifdef USE_TEXTURE_RGBA8UI
-
-            if (enable_cuda)
-            {
-                glClearColorIuiEXT(128,128,128,255);
-            }
-            else
-            {
-                glClearColor(0.5, 0.5, 0.5, 1.0);
-            }
-
-#endif
-            break;
-
     }
 }
 
 void reshape(int w, int h)
 {
-    w -= 8;
-    h -= 8;
     window_width = w;
     window_height = h;
+    image_width = w * factor;
+    image_height = h * factor;
+    printf("shape %d %d\n", w, h);
+
+    createPBO(&pbo_dest, &cuda_pbo_dest_resource);
+    createTextureDst(&tex_cudaResult, image_width, image_height);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -589,9 +528,10 @@ void runStdProgram(int argc, char **argv)
     // register callbacks
     glutDisplayFunc(display);
     glutKeyboardFunc(keyboard);
+    //glutPassiveMotionFunc()
     glutReshapeFunc(reshape);
 
-    //glutTimerFunc(REFRESH_DELAY, timerEvent, 0);
+    glutTimerFunc(REFRESH_DELAY, timerEvent, 0);
     glutIdleFunc(idle);
 
     initGLBuffers();
@@ -630,6 +570,11 @@ bool initGL(int *argc, char **argv)
     gluPerspective(60.0, (GLfloat)window_width / (GLfloat) window_height, 0.1f, 10.0f);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    // miki
+    glutSetCursor(GLUT_CURSOR_NONE);
+    // vsync
+    //((BOOL(WINAPI*)(int))wglGetProcAddress("wglSwapIntervalEXT"))(1);
 
     SDK_CHECK_ERROR_GL();
     return true;

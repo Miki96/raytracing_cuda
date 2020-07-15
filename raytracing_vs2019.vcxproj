@@ -64,7 +64,7 @@
     </Link>
     <CudaCompile>
       <CodeGeneration>compute_75,sm_75</CodeGeneration>
-      <AdditionalOptions>-Xcompiler "/wd 4819" %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>-Xcompiler "/wd 4819" --use_fast_math %(AdditionalOptions)</AdditionalOptions>
       <Include>./;./common/inc</Include>
       <Defines>WIN32</Defines>
     </CudaCompile>
@@ -112,9 +112,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="scene.cpp" />
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="scene.h" />
+    <ClInclude Include="stb_image.h" />
     <ClInclude Include="structs.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

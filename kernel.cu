@@ -1,47 +1,20 @@
-/*
- * Copyright 1993-2015 NVIDIA Corporation.  All rights reserved.
- *
- * Please refer to the NVIDIA end user license agreement (EULA) associated
- * with this source code for terms and conditions that govern your use of
- * this software. Any use, reproduction, disclosure, or distribution of
- * this software and related documentation outside the terms of the EULA
- * is strictly prohibited.
- *
- */
-
-// Utilities and system includes
-
 #include "device_launch_parameters.h"
 #include <helper_cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>
 #include <structs.h>
 #include "vector_functions.h"
+#include <scene.h>
 using namespace std;
 typedef unsigned char GLubyte;
 
-const int SPHERE_NUMBER = 100;
-__constant__ sphere positionsGPU[SPHERE_NUMBER];
+#define MAX_DEPTH 3
+#define PI 3.141592
 
-//float min(float a, float b);
-//float max(float a, float b);
-//#define 	max(a, b)   ((a) > (b) ? (a) : (b))
-//#define 	min(a, b)   ((a) < (b) ? (a) : (b))
-//#define 	make_uchar4(a, b, c, d)   {a,b,c,d}
+__constant__ Object objectsGPU[OBJECTS_NUMBER];
+texture<uchar4, 2, cudaReadModeElementType> tex;
+bool init = false;
 
-// HELPER FUNCTIONS
-// clamp x to range [a, b]
-__device__ float inline clamp(float x, float a, float b)
-{
-    return max(a, min(b, x));
-}
-
-__device__ int inline clamp(int x, int a, int b)
-{
-    return max(a, min(b, x));
-}
-
-// convert floating point rgb color to 8-bit integer
 __device__ int inline rgbToInt(float r, float g, float b)
 {
     r = clamp(r, 0.0f, 255.0f);
@@ -50,7 +23,6 @@ __device__ int inline rgbToInt(float r, float g, float b)
     return (int(b)<<16) | (int(g)<<8) | int(r);
 }
 
-// convert 8-bit integer to floating point rgb color
 __device__ void inline intToRgb(int c, int &r, int &g, int &b)
 {
     b = (c >> 16) & 255;
@@ -58,209 +30,243 @@ __device__ void inline intToRgb(int c, int &r, int &g, int &b)
     r = c & 255;
 }
 
-// vector operations
-__device__ float3 inline operator+(const float3& v1,const float3& v2) {
-    return { v1.x + v2.x, v1.y + v2.y, v1.z + v2.z };
-}
-__device__ float3 inline operator-(const float3& v1, const float3& v2) {
-    return { v1.x - v2.x, v1.y - v2.y, v1.z - v2.z };
-}
-__device__ float inline operator*(const float3& v1, const float3& v2) {
-    return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
-}
-__device__ float3 inline operator*(const float3& v1, const float& a) {
-    return { v1.x * a, v1.y * a, v1.z * a };
-}
-__device__ float inline norm(const float3& v) {
-    //return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
-    return norm3df(v.x, v.y, v.z);
-    //return exp10f(3);
-}
-//__device__ float inline norm2(const float3& v) {
-//    return v.x * v.x + v.y * v.y + v.z * v.z;
-//}
-__device__ float3 inline normalize(const float3& v) {
-    return v * (1.0 / norm(v));
+
+__device__ bool inline checkHit(const Ray& ray, int index, float3& hitPos, float3& hitNormal, float& hitDist) {
+
+    Object& object = objectsGPU[index];
+
+    switch (object.type)
+    {
+    case Primitive::SPHERE:
+
+        float sr = object.size.x;
+        float sr2 = sr * sr;
+
+        float3 L = object.pos - ray.origin;
+        float tca = L * ray.dir;
+        // wrong side of ray
+        if (tca < 0) return false;
+        float d2 = L * L - tca * tca;
+        // ray missed
+        if (d2 > sr2 || d2 < 0) return false;
+        float thc = sqrtf(sr2 - d2);
+
+        // hit distance
+        hitDist = tca - thc;
+        // hit position
+        hitPos = ray.origin + ray.dir * hitDist;
+        // hit normal
+        hitNormal = normalize(hitPos - object.pos);
+
+        return true;
+        break;
+
+    case Primitive::PLANE:
+        bool planeHit = false;
+        float3 planeNormal = object.size;
+        float3 planeOffset = object.pos;
+        float denom = ray.dir * planeNormal;
+        float t;
+        if (denom * denom > 0.00001) {
+            t = ((planeOffset - ray.origin) * planeNormal) / denom;
+
+            if (t < 0) return false;
+
+            // hit distance
+            hitDist = t;
+            // hit position
+            hitPos = ray.origin + ray.dir * t;
+            // hit normal
+            hitNormal = planeNormal;
+
+            return true;
+        }
+        else {
+            return false;
+        }
+        break;
+    case Primitive::TRIANGLE:
+        float3 v0 = object.pos;
+        float3 v1 = object.size;
+        float3 v2 = object.third;
+        // NEW
+        float3 v0v1 = v1 - v0;
+        float3 v0v2 = v2 - v0;
+        float3 pvec = ray.dir^v0v2;
+        float det = v0v1*pvec;
+        if (det < 0.001) return false;
+        float invDet = 1 / det;
+
+        float3 tvec = ray.origin - v0;
+        float u = (tvec*pvec) * invDet;
+        if (u < 0 || u > 1) return false;
+
+        float3 qvec = tvec^(v0v1);
+        float v = (ray.dir*qvec) * invDet;
+        if (v < 0 || u + v > 1) return false;
+
+        t = (v0v2*qvec) * invDet;
+        if (t < 0) return false;
+
+        // hit distance
+        hitDist = t;
+        // hit position
+        hitPos = ray.origin + ray.dir * t;
+        // hit normal
+        hitNormal = v0v1^v0v2;
+
+        return true;
+    }
+
+    return false;
 }
 
-__device__ bool inline checkHitSphere(const float3& ray, const float3& sphere, float3& normal, float& rayDist) {
-    float sr = 0.5;
-    float sr2 = sr * sr;
+template<int depth>
+__device__ float3 inline trace(const Ray& ray, const float3& sun, int n) {
 
-    // calc if hit
-    float image = (sphere * ray);
-    float3 d = ray * image;
-    float dist = norm(d - sphere);
-    // hit pos
-    float tdist = sqrtf(sr2 - dist * dist);
-    float3 t = ray * (image - tdist);
-    // normal
-    normal = normalize(t - sphere);
+    float minHitDist = -1;
+    float3 minHitPos;
+    float3 minHitNormal;
+    int index = -1;
 
-    // save distance from ray
-    rayDist = norm(t);
-    
-    // hit
-    return dist < sr;
+    float3 hitPos;
+    float3 hitNormal;
+    float hitDist;
+
+    // find closest hit
+    for (int i = 0; i < n; i++) {
+        if (checkHit(ray, i, hitPos, hitNormal, hitDist) && (hitDist < minHitDist || minHitDist == -1)) {
+            minHitDist = hitDist;
+            minHitPos = hitPos;
+            minHitNormal = hitNormal;
+            index = i;
+        }
+    }
+
+    // color
+    if (index == -1/* || index == 5*/) {
+
+        // sky texture
+        float y = 1 - (asinf(ray.dir.y) + PI / 2.0f) / PI;
+        float x = (atan2f(ray.dir.x, ray.dir.z) + PI) / (2.0f * PI);
+
+        uchar4 v = tex2D(tex, x, y);
+        return { v.x, v.y, v.z };
+    }
+    else if ((index == 5 || index == 2) && depth < MAX_DEPTH) {
+        // MIRROR
+        // diffuse color
+        Ray shadow = { minHitPos, sun * -1 };
+        shadow.origin = shadow.origin + shadow.dir * 0.001;
+        float part = -1;
+        // check if in shadow
+        for (int i = 0; i < n; i++) {
+            if (checkHit(shadow, i, hitPos, hitNormal, hitDist)) {
+                //return { 0, 0, 0 };
+                part = 0;
+                break;
+            }
+        }
+        if (part == -1) {
+            // not in shadow
+            part = max(0.0, -(minHitNormal * sun));
+        }
+
+        // glass color
+        Ray reflection = { minHitPos, normalize(ray.dir - 2 * (minHitNormal * ray.dir) * minHitNormal) };
+        reflection.origin = reflection.origin + reflection.dir * 0.001;
+        float3 refColor = trace<depth + 1>(reflection, sun, n);
+        float kR = 0.7;
+        return refColor * kR + objectsGPU[index].color * part * (1 - kR);
+    }
+    else {
+        // diffuse object
+        Ray shadow = { minHitPos, sun * -1 };
+        shadow.origin = shadow.origin + shadow.dir * 0.0001;
+
+        float part = -1;
+
+        // check if in shadow
+        for (int i = 0; i < n; i++) {
+            if (checkHit(shadow, i, hitPos, hitNormal, hitDist)) {
+                //return { 0, 0, 0 };
+                part = 0;
+                break;
+            }
+        }
+
+        if (part == -1) {
+            // not in shadow
+            part = max(0.0, -(minHitNormal * sun));
+        }
+
+        // specular
+        float3 specDir = normalize(sun - 2 * (minHitNormal * sun) * minHitNormal);
+        float partSpec = __powf(max(0.0, -(specDir * ray.dir)), 256);
+        //partSpec = 0;
+
+        // ambient light
+        part += 0.22;
+        float3 white = { 255, 255, 255 };
+        return objectsGPU[index].color * part + white * partSpec;
+    }
 }
 
-__device__ bool inline checkShadow(const float3& origin, const float3& ray, const float3& sphere) {
-    float sr = 0.5;
-    float sr2 = sr * sr;
-
-    // calc if hit
-    float3 L = sphere - origin;
-    float image = (L * ray);
-    if (image < 0) return false;
-
-    float d = L * L - image * image;
-    if (d > sr2 || d < 0) return false;
-
-    // hit
-    return true;
+template<>
+__device__ float3 inline trace<MAX_DEPTH + 1>(const Ray& ray, const float3& sun, int n) {
+    return { 0, 0, 0 };
 }
-
 
 // GPU
 __global__ void
-cudaProcess(unsigned int *g_odata, int imgw, int imgh, float3 pos, float3 sun, sphere *positions, int n)
+raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun, int n)
 {
-    positions = positionsGPU;
     // get location
     int tx = threadIdx.x;
     int ty = threadIdx.y;
     int bw = blockDim.x;
     int bh = blockDim.y;
     // coordinates
-    int x = blockIdx.x*bw + tx;
-    int y = blockIdx.y*bh + ty;
-
+    int x = blockIdx.x * bw + tx;
+    int y = blockIdx.y * bh + ty;
+    // exit if out of image
     if (x >= imgw || y >= imgh) return;
     float aspect = (1.0 * imgw) / imgh;
 
-    // hit spheres
-    sun = normalize(sun);
-    float sr = 0.5;
-    float sr2 = sr * sr;
-
-    float3 mnormal;
-    float mdist = -1;
-    float3 ray = normalize({ 
-        ((float)x / (float)(imgw - 1) - 0.5) * 2.0 * aspect,
-        -((float)y / (float)(imgh - 1) - 0.5) * 2.0,
-        -1 
-    });
-
-    // spheres
-    bool hit = false;
-    float3 normal;
-    float rayDist;
-    int selected = -1;
-    for (int i = 0; i < n; i++) {
-        pos = { positions[i].x, positions[i].y, positions[i].z };
-        if (checkHitSphere(ray, pos, normal, rayDist)) {
-            if (mdist == -1 || mdist > rayDist) {
-                mdist = rayDist;
-                mnormal = normal;
-                selected = i;
-            }
-            hit = true;
-        }
-    }
-
-    // plane
-    bool planeHit = false;
-    float3 planeNormal = { 0, 1, 0 };
-    float3 planeOffset = { 0, -1, 0 };
-    float denom = ray * planeNormal;
-    float t;
-    if (denom * denom > 0.00001) {
-        t = (planeOffset * planeNormal) / denom;
-        if (t > 0 && (mdist == -1 || t < mdist)) {
-            mnormal = planeNormal;
-            hit = true;
-            planeHit = true;
-            mdist = t;
-        }
-    }
-
-    // draw shadow on plane
-    bool shadow = false;
-    if (planeHit) {
-        float3 p = ray * (mdist);
-        for (int i = 0; i < n; i++) {
-            pos = { positions[i].x, positions[i].y, positions[i].z };
-            if (checkShadow(p, sun * -1, pos)) {
-                shadow = true;
-                break;
-            }
-        }
-    }
-
-    // draw shadow on ball
-    bool shadowBall = false;
-    if (!planeHit && hit) {
-        float3 p = ray * (mdist);
-        for (int i = 0; i < n; i++) {
-            pos = { positions[i].x, positions[i].y, positions[i].z };
-            if (checkShadow(p, sun * -1, pos)) {
-                shadowBall = true;
-                break;
-            }
-        }
-    }
-
-    float3 color = { 255, 255, 255 };
-    if (selected != -1 && !planeHit) {
-        color = {
-            positions[selected].r,
-            positions[selected].g,
-            positions[selected].b
-        };
-    }
-
-    // light
-    uchar4 c4;
-    if (hit && !shadow && !shadowBall) {
-        float part = max(0.0, -(mnormal * sun));
-        unsigned char c = part * 255;
-        c4 = { color.x * part, color.y * part, color.z * part, 1 };
-    }
-    /*else if (shadow) {
-        c4 = { 30, 30, 30, 0 };
-    }
-    else if (hit && shadowBall) {
-        c4 = { 30, 30, 30, 0 };
-    }*/
-    else {
-        c4 = { 0, 0, 0, 0 };
-    }
-    g_odata[y*imgw+x] = rgbToInt(c4.x, c4.y, c4.z);
-
-    //g_odata[y * imgw + x] = rgbToInt(244, 100, 40);
-
-    /*
-    //if (hit) {
+    //// show image
+    //if (x >= 1436 || y >= 357) {
+    //    image[y * imgw + x] = rgbToInt(220, 0, 0);
     //}
     //else {
-    //    // back
-    //    c4 = { 130, 130, 130, 0 };
+    //    int i = (y * 1436 + x) * 3;
+    //    image[y * imgw + x] = rgbToInt(tex[i], tex[i+1], tex[i+2]);
     //}
+    //return;
 
-    if (!hit && (
-           y == imgw * 1 / 4
-        || y == imgw * 3 / 4
-        || y == imgw * 1 / 2
-        || x == imgh * 1 / 4
-        || x == imgh * 3 / 4
-        || x == imgh * 1 / 2)) {
-        c4 = { 0, 0, 0, 0 };
-    }*/
+    // position sun
+    sun = normalize(sun);
+
+    // create camera ray
+    float partX = (float)x / (float)(imgw - 1);
+    float partY = (float)y / (float)(imgh - 1);
+    float3 vd = cam.LD + (cam.RD - cam.LD) * partX;
+    float3 vu = cam.LU + (cam.RU - cam.LU) * partX;
+    float3 target = vu - (vu - vd) * partY;
+
+    Ray ray = {
+        cam.pos,
+        normalize(target),
+    };
+
+    // color pixel
+    float3 c = trace<0>(ray, sun, n);
+    image[y * imgw + x] = rgbToInt(c.x, c.y, c.z);
+    return;
 }
 
 // AntiAliasing
 __global__ void
-cudaAlias(unsigned int* g_odata, int imgw, int imgh)
+antialiasing(unsigned int* image, int imgw, int imgh)
 {
     int tx = threadIdx.x;
     int ty = threadIdx.y;
@@ -293,15 +299,15 @@ cudaAlias(unsigned int* g_odata, int imgw, int imgh)
         intToRgb(blockData[tx-1][ty+1], rgb[7][0], rgb[7][1], rgb[7][2]);
         intToRgb(blockData[tx-1][ty-1], rgb[8][0], rgb[8][1], rgb[8][2]);*/
 
-        intToRgb(g_odata[(y + 0) * imgw + x - 1], rgb[0][0], rgb[0][1], rgb[0][2]);
-        intToRgb(g_odata[(y + 0) * imgw + x + 0], rgb[1][0], rgb[1][1], rgb[1][2]);
-        intToRgb(g_odata[(y + 0) * imgw + x + 1], rgb[2][0], rgb[2][1], rgb[2][2]);
-        intToRgb(g_odata[(y - 1) * imgw + x - 1], rgb[3][0], rgb[3][1], rgb[3][2]);
-        intToRgb(g_odata[(y - 1) * imgw + x + 0], rgb[4][0], rgb[4][1], rgb[4][2]);
-        intToRgb(g_odata[(y - 1) * imgw + x + 1], rgb[5][0], rgb[5][1], rgb[5][2]);
-        intToRgb(g_odata[(y + 1) * imgw + x - 1], rgb[6][0], rgb[6][1], rgb[6][2]);
-        intToRgb(g_odata[(y + 1) * imgw + x + 0], rgb[7][0], rgb[7][1], rgb[7][2]);
-        intToRgb(g_odata[(y + 1) * imgw + x + 1], rgb[8][0], rgb[8][1], rgb[8][2]);
+        intToRgb(image[(y + 0) * imgw + x - 1], rgb[0][0], rgb[0][1], rgb[0][2]);
+        intToRgb(image[(y + 0) * imgw + x + 0], rgb[1][0], rgb[1][1], rgb[1][2]);
+        intToRgb(image[(y + 0) * imgw + x + 1], rgb[2][0], rgb[2][1], rgb[2][2]);
+        intToRgb(image[(y - 1) * imgw + x - 1], rgb[3][0], rgb[3][1], rgb[3][2]);
+        intToRgb(image[(y - 1) * imgw + x + 0], rgb[4][0], rgb[4][1], rgb[4][2]);
+        intToRgb(image[(y - 1) * imgw + x + 1], rgb[5][0], rgb[5][1], rgb[5][2]);
+        intToRgb(image[(y + 1) * imgw + x - 1], rgb[6][0], rgb[6][1], rgb[6][2]);
+        intToRgb(image[(y + 1) * imgw + x + 0], rgb[7][0], rgb[7][1], rgb[7][2]);
+        intToRgb(image[(y + 1) * imgw + x + 1], rgb[8][0], rgb[8][1], rgb[8][2]);
 
         float k = 9;
 
@@ -314,62 +320,48 @@ cudaAlias(unsigned int* g_odata, int imgw, int imgh)
         g /= k;
         b /= k;
 
-        g_odata[y * imgw + x] = rgbToInt(r, g, b);
+        image[y * imgw + x] = rgbToInt(r, g, b);
     }
 
     //intToRgb(g_odata[(y) * imgw + x], r, g, b);
     //g_odata[y * imgw + x] = rgbToInt(r, g, b);
-    
 }
 
-
-// Launcher
+// launcher
 extern "C" void
 launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
                    unsigned int *g_odata,
-                   int imgw, int imgh, float3 pos, float3 sun, sphere *positions, int n)
+                   int imgw, int imgh, Camera cam, float3 sun, Object *objects, int n, unsigned char* h_tex, int w, int h)
 {
+    if (!init) {
+        init = true;
 
-    //cudaMemcpyToSymbol(coeffs1, cff1, 8 * sizeof(float));
-    //cout << "test" << positions[12].g << endl;
+        // 2D
+        int mem_size = sizeof(uchar4) * w * h;
+        cudaArray *d_array;
+        cudaMallocArray(&d_array, &tex.channelDesc, w, h);
+        cudaMemcpyToArray(d_array, 0, 0, h_tex, mem_size, cudaMemcpyHostToDevice);
+
+        // Set texture parameters
+        tex.normalized = true;
+        cudaBindTextureToArray(tex, d_array, tex.channelDesc);
+    }
+
+    //cudaFuncSetCacheConfig(raytracing, cudaFuncCachePreferL1);
     getLastCudaError("ERROR TEST\n");
 
-    cudaMemcpyToSymbol(positionsGPU, positions, sizeof(sphere) * SPHERE_NUMBER);
+    cudaMemcpyToSymbol(objectsGPU, objects, sizeof(Object) * OBJECTS_NUMBER);
 
     getLastCudaError("ERROR COPy\n");
 
     // raytracing
 
-    cudaProcess<<< grid, block >>>(g_odata, imgw, imgh, pos, sun, positionsGPU, n);
+    raytracing<<< grid, block >>>(g_odata, imgw, imgh, cam, sun, n);
 
-    //getLastCudaError("ERROR FIRST\n");
+    getLastCudaError("ERROR FIRST\n");
 
-    //cudaAlias<<< grid, block >>> (g_odata, imgw, imgh); 
-
-    // mandelbrot
-    //cudaMandel << < grid, block >> > (g_odata, imgw, imgh, offsetX, offsetY, zoom);
+    antialiasing<<< grid, block >>> (g_odata, imgw, imgh); 
 
     getLastCudaError("ERROR MIKi\n");
-    //cpuCalc(imgw, imgh, g_odata, pos, sun);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
