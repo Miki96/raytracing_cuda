@@ -58,6 +58,8 @@ unsigned int image_width = width * factor;
 unsigned int image_height = height * factor;
 int iGLUTWindowHandle = 0;  // handle to the GLUT window
 
+const int blockDim = 16;
+
 // delta time
 int timeStart = 0;
 float deltaTime = 1;
@@ -181,8 +183,7 @@ void generateCUDAImage()
     //printf("CUDA mapped pointer of pbo_out: May access %ld bytes, expected %d\n", num_bytes, size_tex_data);
     // calculate grid size
     //dim3 block(32, 32, 1);
-    int dm = 32;
-    dim3 block(dm, dm, 1);
+    dim3 block(blockDim, blockDim, 1);
     dim3 grid(image_width / block.x + 1, image_height / block.y + 1, 1);
     //cout << grid.x << endl;
     //cout << grid.y << endl;

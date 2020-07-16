@@ -24,6 +24,7 @@ float alpha = 180;
 float alphaDelta = 1;
 
 Object* objects;
+Light* lights;
 
 unsigned char* texture;
 int texW;
@@ -34,7 +35,8 @@ extern "C" void
 launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
     unsigned int* g_odata,
     int imgw, int imgh,
-    Camera cam, float3 sun, Object * positions, int n, unsigned char* tex, int w, int h);
+    Camera cam, float3 sun, Object * objectPositions, Light* lightPositions,
+    unsigned char* tex, int w, int h);
 void cameraHelperAngles();
 
 void initCamera() {
@@ -55,66 +57,63 @@ float angle[] = { 110, 80, 90, 70, 60 };
 float speed[] = { -0.015, 0.01, -0.02, 0.005, -0.012 };
 
 void initObjects() {
+    objects = (Object*)malloc(sizeof(Object) * OBJECTS_NUMBER);
+
     // RED
     {
         int i = 0;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{-5, -2, -13},
-            float3{0.91 * 255, 0.1 * 255, 0.0 * 255},
-            float3{2, 2, 2}
-        };
+        objects[i].type = Primitive::SPHERE;
+        objects[i].color = { 0.91, 0.1, 0.1 };
+        objects[i].mirror = 0;
+        objects[i].specular = 256;
+        objects[i].shine = 1;
+        objects[i].pos = { -5, -2, -13 };
+        objects[i].size = { 2, 2, 2 };
     }
     // GREEN
     {
         int i = 1;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{2.5, -2.5, -12},
-            float3{0 * 255, 1 * 255, 0.1 * 255},
-            float3{1.5, 1.5, 1.5}
-        };
+        objects[i].type = Primitive::SPHERE;
+        objects[i].color = { 0, 1, 0.1 };
+        objects[i].mirror = 0;
+        objects[i].specular = 256;
+        objects[i].shine = 0;
+        objects[i].pos = { 2.5, -2.5, -12 };
+        objects[i].size = { 1.5, 1.5, 1.5 };
     }
     // MIRROR
     {
         int i = 2;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{0, 1, -20},
-            float3{0, 0, 0},
-            float3{5, 5, 5}
-        };
+        objects[i].type = Primitive::SPHERE;
+        objects[i].color = { 0, 0, 0 };
+        objects[i].mirror = 1;
+        objects[i].specular = 256;
+        objects[i].shine = 1;
+        objects[i].pos = { 0, 1, -20 };
+        objects[i].size = { 5, 5, 5 };
     }
     // YELLOW
     {
         int i = 3;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{15, -1, -40},
-            float3{0.9 * 255, 0.9 * 255, 0.1 * 255},
-            float3{3, 3, 3}
-        };
+        objects[i].type = Primitive::SPHERE;
+        objects[i].color = { 0.9, 0.9, 0.1 };
+        objects[i].mirror = 0;
+        objects[i].specular = 1256;
+        objects[i].shine = 1;
+        objects[i].pos = { 15, -1, -40 };
+        objects[i].size = { 3, 3, 3 };
     }
     // BLUE GLASS
     {
         int i = 4;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{10, -2, -20},
-            float3{0, 128, 255},
-            float3{2, 2, 2}
-        };
+        objects[i].type = Primitive::SPHERE;
+        objects[i].color = { 0, 0.5, 1 };
+        objects[i].mirror = 0;
+        objects[i].specular = 16;
+        objects[i].shine = 0.1;
+        objects[i].pos = { 10, -2, -20 };
+        objects[i].size = { 2, 2, 2 };
     }
-    // FLOOR
-    /*{
-        int i = 5;
-        objects[i] = {
-            Primitive::SPHERE,
-            float3{0, -10004, -20},
-            float3{99, 93, 226},
-            float3{10000, 10000, 10000}
-        };
-    }*/
 
     // PLANE
     {
@@ -127,69 +126,72 @@ void initObjects() {
         objects[i].pos.z = 0;
         // color
         rgb c = hsv2rgb({ (double)(rand() % 360), 0.9, 0.9 });
-        objects[i].color.x = 0;
-        objects[i].color.y = 0;
-        objects[i].color.z = 0;
+        objects[i].color.x = 1;
+        objects[i].color.y = 1;
+        objects[i].color.z = 1;
+        objects[i].mirror = 0.2;
+        objects[i].specular = 256;
+        objects[i].shine = 0;
         // normal
         objects[i].size.x = 0;
         objects[i].size.y = 1;
         objects[i].size.z = 0;
     }
 
-    // calc distances
-    for (int i = 0; i < 5; i++) {
-        float3 v = objects[i].pos;
-        v.y = 0;
-        dist[i] = norm(v);
-    }
+    //// calc distances
+    //for (int i = 0; i < 5; i++) {
+    //    float3 v = objects[i].pos;
+    //    v.y = 0;
+    //    dist[i] = norm(v);
+    //}
 
-    // add triangles
-    {
-        float y = 0.86f;
-        float x = 0.5f;
-        float h = y * 2.0f / 3.0f;
-        float v = y * 1.0f / 3.0f;
+    //// add triangles
+    //{
+    //    float y = 0.86f;
+    //    float x = 0.5f;
+    //    float h = y * 2.0f / 3.0f;
+    //    float v = y * 1.0f / 3.0f;
 
-        float3 tris[] = {
-            // down
-            {0, 0, 0}, // 0
-            {1, 0, 0}, // 1
-            {x, 0, y}, // 2
-            // front
-            {0, 0, 0}, // 0
-            {x, 1, v}, // 3
-            {1, 0, 0}, // 1
-            // left
-            {0, 0, 0}, // 0
-            {x, 0, y}, // 2
-            {x, 1, v}, // 3
-            // right
-            {1, 0, 0}, // 1
-            {x, 1, v}, // 3
-            {x, 0, y}, // 2
-        };
+    //    float3 tris[] = {
+    //        // down
+    //        {0, 0, 0}, // 0
+    //        {1, 0, 0}, // 1
+    //        {x, 0, y}, // 2
+    //        // front
+    //        {0, 0, 0}, // 0
+    //        {x, 1, v}, // 3
+    //        {1, 0, 0}, // 1
+    //        // left
+    //        {0, 0, 0}, // 0
+    //        {x, 0, y}, // 2
+    //        {x, 1, v}, // 3
+    //        // right
+    //        {1, 0, 0}, // 1
+    //        {x, 1, v}, // 3
+    //        {x, 0, y}, // 2
+    //    };
 
-        for (int i = 0; i < 4 * 3; i++) {
-            tris[i].x += 3;
-            tris[i].y -= 1;
-        }
+    //    for (int i = 0; i < 4 * 3; i++) {
+    //        tris[i].x += 3;
+    //        tris[i].y -= 1;
+    //    }
 
-        for (int i = 0; i < 4 * 3; i++) {
-            tris[i].x *= 2;
-            tris[i].y *= 2;
-            tris[i].z *= 2;
-        }
+    //    for (int i = 0; i < 4 * 3; i++) {
+    //        tris[i].x *= 2;
+    //        tris[i].y *= 2;
+    //        tris[i].z *= 2;
+    //    }
 
-        for (int i = 0; i < 4; i++) {
-            objects[i + 6] = {
-                Primitive::TRIANGLE,
-                tris[i * 3],
-                float3{0, 0, 200},
-                tris[i * 3 + 1],
-                tris[i * 3 + 2]
-            };
-        }
-    }
+    //    for (int i = 0; i < 4; i++) {
+    //        objects[i + 6] = {
+    //            Primitive::TRIANGLE,
+    //            tris[i * 3],
+    //            float3{0, 0, 200},
+    //            tris[i * 3 + 1],
+    //            tris[i * 3 + 2]
+    //        };
+    //    }
+    //}
 }
 
 void initTexture() {
@@ -198,20 +200,39 @@ void initTexture() {
     printf("%d %d %d\n", texW, texH, n);
 }
 
+void initLights() {
+    lights = (Light*)malloc(sizeof(Light) * LIGHTS_NUMBER);
+
+    // SUN
+    {
+        int i = 0;
+        lights[i].color = { 1, 1, 0.5 };
+        lights[i].intensity = 1000;
+        lights[i].pos = { 30, 30, 30 };
+    }
+
+    // MOON
+    {
+        int i = 1;
+        lights[i].color = { 1, 0, 1 };
+        lights[i].intensity = 1000;
+        lights[i].pos = { -30, 30, 30 };
+    }
+}
+
 void initScene() {
     // create spheres
     srand(time(NULL));
 
-    objects = (Object*)malloc(sizeof(Object) * OBJECTS_NUMBER);
-
     initCamera();
     initObjects();
+    initLights();
     initTexture();
 }
 
 void launch(dim3 grid, dim3 block, unsigned int* out_data, int imgw, int imgh) {
     aspect = (1.0f * imgw) / imgh;
-    launch_cudaProcess(grid, block, 0, out_data, imgw, imgh, cam, sunPos, objects, OBJECTS_NUMBER, texture, texW, texH);
+    launch_cudaProcess(grid, block, 0, out_data, imgw, imgh, cam, sunPos, objects, lights, texture, texW, texH);
 }
 
 float3 transform(float3& vec, float3 *matrix) {
@@ -248,7 +269,6 @@ float3 rotateZ(float3& vec, float a) {
     };
     return transform(vec, matrix);
 }
-
 
 void cameraHelperAngles() {
     float rad = PI / 180.0f;
@@ -315,6 +335,15 @@ void moveCamera() {
     }
 }
 
+void moveSun() {
+    int verMove = (bool)GetAsyncKeyState(0x49) - (bool)GetAsyncKeyState(0x4B);
+    int horMove = (bool)GetAsyncKeyState(0x4C) - (bool)GetAsyncKeyState(0x4A);
+    int upMove = (bool)GetAsyncKeyState(0x4F) - (bool)GetAsyncKeyState(0x55);
+
+    lights[0].pos.x += verMove;
+    lights[0].pos.z += horMove;
+    lights[0].pos.y += upMove;
+}
 
 void animate() {
     // spin
@@ -345,11 +374,12 @@ void animate() {
     }*/
 
     moveCamera();
+    moveSun();
     
     // reset
     bool reset = (GetKeyState(0x52) & 0x8000);
     if (reset) {
-        initObjects();
+        //initObjects();
     }
 
 }

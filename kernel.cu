@@ -12,6 +12,7 @@ typedef unsigned char GLubyte;
 #define PI 3.141592
 
 __constant__ Object objectsGPU[OBJECTS_NUMBER];
+__constant__ Light lightsGPU[LIGHTS_NUMBER];
 texture<uchar4, 2, cudaReadModeElementType> tex;
 bool init = false;
 
@@ -122,7 +123,7 @@ __device__ bool inline checkHit(const Ray& ray, int index, float3& hitPos, float
 }
 
 template<int depth>
-__device__ float3 inline trace(const Ray& ray, const float3& sun, int n) {
+__device__ float3 inline trace(const Ray& ray, const float3& sun) {
 
     float minHitDist = -1;
     float3 minHitPos;
@@ -134,7 +135,7 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun, int n) {
     float hitDist;
 
     // find closest hit
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < OBJECTS_NUMBER; i++) {
         if (checkHit(ray, i, hitPos, hitNormal, hitDist) && (hitDist < minHitDist || minHitDist == -1)) {
             minHitDist = hitDist;
             minHitPos = hitPos;
@@ -143,83 +144,77 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun, int n) {
         }
     }
 
-    // color
-    if (index == -1/* || index == 5*/) {
+    // calculate pixel color
+    if (index == -1) {
 
-        // sky texture
+        // ray miss - sky
         float y = 1 - (asinf(ray.dir.y) + PI / 2.0f) / PI;
         float x = (atan2f(ray.dir.x, ray.dir.z) + PI) / (2.0f * PI);
-
         uchar4 v = tex2D(tex, x, y);
-        return { v.x, v.y, v.z };
-    }
-    else if ((index == 5 || index == 2) && depth < MAX_DEPTH) {
-        // MIRROR
-        // diffuse color
-        Ray shadow = { minHitPos, sun * -1 };
-        shadow.origin = shadow.origin + shadow.dir * 0.001;
-        float part = -1;
-        // check if in shadow
-        for (int i = 0; i < n; i++) {
-            if (checkHit(shadow, i, hitPos, hitNormal, hitDist)) {
-                //return { 0, 0, 0 };
-                part = 0;
-                break;
-            }
-        }
-        if (part == -1) {
-            // not in shadow
-            part = max(0.0, -(minHitNormal * sun));
-        }
+        return float3{ v.x, v.y, v.z } * (1.0f / 255.0f);
 
-        // glass color
-        Ray reflection = { minHitPos, normalize(ray.dir - 2 * (minHitNormal * ray.dir) * minHitNormal) };
-        reflection.origin = reflection.origin + reflection.dir * 0.001;
-        float3 refColor = trace<depth + 1>(reflection, sun, n);
-        float kR = 0.7;
-        return refColor * kR + objectsGPU[index].color * part * (1 - kR);
     }
     else {
-        // diffuse object
-        Ray shadow = { minHitPos, sun * -1 };
-        shadow.origin = shadow.origin + shadow.dir * 0.0001;
 
-        float part = -1;
+        // ray hit - object
+        Object& o = objectsGPU[index];
 
-        // check if in shadow
-        for (int i = 0; i < n; i++) {
-            if (checkHit(shadow, i, hitPos, hitNormal, hitDist)) {
-                //return { 0, 0, 0 };
-                part = 0;
-                break;
+        float ambient = 0.2;
+        float3 phongColor = o.color * ambient;
+
+        // calcuate phong color
+        for (int i = 0; i < LIGHTS_NUMBER; i++) {
+            Light l = lightsGPU[i];
+
+            // direct color
+            float3 vec = l.pos - minHitPos;
+            float shadowDist = norm(vec);
+            float3 shadowDir = normalize(vec);
+            Ray shadow = { minHitPos, shadowDir };
+            shadow.origin = shadow.origin + shadow.dir * 0.001;
+
+            float angle = max(0.0, (minHitNormal * shadowDir));
+
+            // check if in shadow
+            for (int k = 0; k < OBJECTS_NUMBER; k++) {
+                if (checkHit(shadow, k, hitPos, hitNormal, hitDist)) {
+                    angle = 0;
+                    break;
+                }
             }
+
+            phongColor = phongColor + (o.color | l.color) * ((angle * l.intensity) / (shadowDist * shadowDist));
+
+            // specular
+            float3 lightDir = shadowDir * -1;
+            float3 specDir = normalize(lightDir - 2 * (minHitNormal * lightDir) * minHitNormal);
+            float3 specColor = __powf(max(0.0, -(specDir * ray.dir)), o.specular) * float3{1, 1, 1} * o.shine; // 256
+
+            phongColor = phongColor + specColor;
         }
 
-        if (part == -1) {
-            // not in shadow
-            part = max(0.0, -(minHitNormal * sun));
+        // calculate reflective color
+        float3 refColor = { 0, 0, 0 };
+        float kR = o.mirror;
+        if (kR > 0) {
+            Ray reflection = { minHitPos, normalize(ray.dir - 2 * (minHitNormal * ray.dir) * minHitNormal) };
+            reflection.origin = reflection.origin + reflection.dir * 0.001;
+            refColor = trace<depth + 1>(reflection, sun);
         }
 
-        // specular
-        float3 specDir = normalize(sun - 2 * (minHitNormal * sun) * minHitNormal);
-        float partSpec = __powf(max(0.0, -(specDir * ray.dir)), 256);
-        //partSpec = 0;
-
-        // ambient light
-        part += 0.22;
-        float3 white = { 255, 255, 255 };
-        return objectsGPU[index].color * part + white * partSpec;
+        // result
+        return (refColor * kR + phongColor * (1 - kR));
     }
 }
 
 template<>
-__device__ float3 inline trace<MAX_DEPTH + 1>(const Ray& ray, const float3& sun, int n) {
+__device__ float3 inline trace<MAX_DEPTH + 1>(const Ray& ray, const float3& sun) {
     return { 0, 0, 0 };
 }
 
 // GPU
 __global__ void
-raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun, int n)
+raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun)
 {
     // get location
     int tx = threadIdx.x;
@@ -232,16 +227,6 @@ raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun, int 
     // exit if out of image
     if (x >= imgw || y >= imgh) return;
     float aspect = (1.0 * imgw) / imgh;
-
-    //// show image
-    //if (x >= 1436 || y >= 357) {
-    //    image[y * imgw + x] = rgbToInt(220, 0, 0);
-    //}
-    //else {
-    //    int i = (y * 1436 + x) * 3;
-    //    image[y * imgw + x] = rgbToInt(tex[i], tex[i+1], tex[i+2]);
-    //}
-    //return;
 
     // position sun
     sun = normalize(sun);
@@ -259,7 +244,7 @@ raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun, int 
     };
 
     // color pixel
-    float3 c = trace<0>(ray, sun, n);
+    float3 c = trace<0>(ray, sun) * 255;
     image[y * imgw + x] = rgbToInt(c.x, c.y, c.z);
     return;
 }
@@ -331,37 +316,34 @@ antialiasing(unsigned int* image, int imgw, int imgh)
 extern "C" void
 launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
                    unsigned int *g_odata,
-                   int imgw, int imgh, Camera cam, float3 sun, Object *objects, int n, unsigned char* h_tex, int w, int h)
+                   int imgw, int imgh, Camera cam, float3 sun, Object *objects, Light * lights,
+                   unsigned char* h_tex, int w, int h)
 {
-    if (!init) {
+    // texture
+    if (!init) 
+    {
         init = true;
 
-        // 2D
         int mem_size = sizeof(uchar4) * w * h;
         cudaArray *d_array;
         cudaMallocArray(&d_array, &tex.channelDesc, w, h);
         cudaMemcpyToArray(d_array, 0, 0, h_tex, mem_size, cudaMemcpyHostToDevice);
 
-        // Set texture parameters
         tex.normalized = true;
         cudaBindTextureToArray(tex, d_array, tex.channelDesc);
     }
-
     //cudaFuncSetCacheConfig(raytracing, cudaFuncCachePreferL1);
-    getLastCudaError("ERROR TEST\n");
+    getLastCudaError("Error texture\n");
 
+    // constants
     cudaMemcpyToSymbol(objectsGPU, objects, sizeof(Object) * OBJECTS_NUMBER);
-
-    getLastCudaError("ERROR COPy\n");
+    cudaMemcpyToSymbol(lightsGPU, lights, sizeof(Light) * LIGHTS_NUMBER);
+    getLastCudaError("Error constants\n");
 
     // raytracing
-
-    raytracing<<< grid, block >>>(g_odata, imgw, imgh, cam, sun, n);
-
-    getLastCudaError("ERROR FIRST\n");
-
+    raytracing<<< grid, block >>>(g_odata, imgw, imgh, cam, sun);
+    getLastCudaError("Error raytracing\n");
     antialiasing<<< grid, block >>> (g_odata, imgw, imgh); 
-
-    getLastCudaError("ERROR MIKi\n");
+    getLastCudaError("Error antialiasing\n");
 }
 

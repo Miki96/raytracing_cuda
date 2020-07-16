@@ -6,7 +6,8 @@
 extern float deltaTime;
 
 // constants
-const int OBJECTS_NUMBER = 10;
+const int OBJECTS_NUMBER = 6;
+const int LIGHTS_NUMBER = 2;
 
 // functions
 void initScene();

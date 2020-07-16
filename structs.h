@@ -26,8 +26,11 @@ enum __host__ __device__ Primitive {
 struct __host__ __device__ Object
 {
     Primitive type;
-    float3 pos;
+    float shine;
+    float specular;
+    float mirror;
     float3 color;
+    float3 pos;
     float3 size;
     float3 third;
 };
@@ -36,6 +39,13 @@ struct __host__ __device__ Ray
 {
     float3 origin;
     float3 dir;
+};
+
+struct __host__ __device__ Light
+{
+    float3 pos;
+    float3 color;
+    float intensity;
 };
 
 typedef struct {
@@ -174,6 +184,9 @@ __host__ __device__ float3 inline operator*(const float& a, const float3& v1) {
 }
 __host__ __device__ float3 inline operator^(const float3& v1, const float3& v2) {
     return { v1.y * v2.z - v1.z * v2.y, v1.z * v2.x - v1.x * v2.z, v1.x * v2.y - v1.y * v2.x };
+}
+__host__ __device__ float3 inline operator|(const float3& v1, const float3& v2) {
+    return { v1.x * v2.x, v1.y * v2.y, v1.z * v2.z };
 }
 __host__ __device__ float inline norm(const float3& v) {
     #ifdef __CUDA_ARCH__
