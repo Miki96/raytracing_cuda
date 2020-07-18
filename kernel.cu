@@ -2,13 +2,13 @@
 #include <helper_cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>
-#include <structs.h>
 #include "vector_functions.h"
 #include <scene.h>
+#include <structs.h>
 using namespace std;
 typedef unsigned char GLubyte;
 
-#define MAX_DEPTH 3
+#define MAX_DEPTH 4
 #define PI 3.141592
 
 __constant__ Object objectsGPU[OBJECTS_NUMBER];
@@ -114,7 +114,7 @@ __device__ bool inline checkHit(const Ray& ray, int index, float3& hitPos, float
         // hit position
         hitPos = ray.origin + ray.dir * t;
         // hit normal
-        hitNormal = v0v1^v0v2;
+        hitNormal = normalize(v0v1^v0v2);
 
         return true;
     }
@@ -147,6 +147,7 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun) {
     // calculate pixel color
     if (index == -1) {
 
+        return { 1, 1, 1 };
         // ray miss - sky
         float y = 1 - (asinf(ray.dir.y) + PI / 2.0f) / PI;
         float x = (atan2f(ray.dir.x, ray.dir.z) + PI) / (2.0f * PI);
@@ -186,9 +187,12 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun) {
             phongColor = phongColor + (o.color | l.color) * ((angle * l.intensity) / (shadowDist * shadowDist));
 
             // specular
-            float3 lightDir = shadowDir * -1;
-            float3 specDir = normalize(lightDir - 2 * (minHitNormal * lightDir) * minHitNormal);
-            float3 specColor = __powf(max(0.0, -(specDir * ray.dir)), o.specular) * float3{1, 1, 1} * o.shine; // 256
+            float3 specColor = { 0, 0, 0 };
+            if (o.shine > 0) {
+                float3 lightDir = shadowDir * -1;
+                float3 specDir = normalize(lightDir - 2 * (minHitNormal * lightDir) * minHitNormal);
+                specColor = __powf(max(0.0, -(specDir * ray.dir)), o.specular) * float3{1, 1, 1} * o.shine; // 256
+            }
 
             phongColor = phongColor + specColor;
         }
@@ -343,7 +347,7 @@ launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
     // raytracing
     raytracing<<< grid, block >>>(g_odata, imgw, imgh, cam, sun);
     getLastCudaError("Error raytracing\n");
-    antialiasing<<< grid, block >>> (g_odata, imgw, imgh); 
+    //antialiasing<<< grid, block >>> (g_odata, imgw, imgh); 
     getLastCudaError("Error antialiasing\n");
 }
 

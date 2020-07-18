@@ -48,7 +48,7 @@ unsigned int g_TotalErrors = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 // constants / global variables
-int factor = 5;
+int factor = 1;
 int window_factor = 1;
 int width = 1280;
 int height = 720;

@@ -2,11 +2,13 @@
 #include <vector_types.h>
 #include <structs.h>
 
+#define PI 3.141592
+
 // time sync
 extern float deltaTime;
 
 // constants
-const int OBJECTS_NUMBER = 6;
+const int OBJECTS_NUMBER = 131;
 const int LIGHTS_NUMBER = 2;
 
 // functions

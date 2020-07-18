@@ -209,4 +209,4 @@ __host__ __device__ int inline clamp(int x, int a, int b)
     return max(a, min(b, x));
 }
 
-// transformations
+
