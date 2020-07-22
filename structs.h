@@ -33,6 +33,7 @@ struct __host__ __device__ Object
     float3 pos;
     float3 size;
     float3 third;
+    bool light;
 };
 
 struct __host__ __device__ Ray
@@ -197,6 +198,13 @@ __host__ __device__ float inline norm(const float3& v) {
 }
 __host__ __device__ float3 inline normalize(const float3& v) {
     return v * (1.0 / norm(v));
+}
+
+__host__ __device__ uchar4 inline operator*(const uchar4& v1, const float& a) {
+    return { (unsigned char)(v1.x * a), (unsigned char)(v1.y * a), (unsigned char)(v1.z * a), (unsigned char)(v1.w * a) };
+}
+__host__ __device__ uchar4 inline operator+(const uchar4& v1, const uchar4& v2) {
+    return { (unsigned char)(v1.x + v2.x), (unsigned char)(v1.y + v2.y), (unsigned char)(v1.z + v2.z), (unsigned char)(v1.w + v2.w) };
 }
 
 __host__ __device__ float inline clamp(float x, float a, float b)

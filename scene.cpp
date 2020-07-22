@@ -7,11 +7,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <transforms.h>
+#include <vector>
 
 float3 sunPos = { -1, -1, -1 };
 
 Camera cam;
-float moveSpeed = 0.3f;
+float moveSpeed = 0.3f * 2;
 float camViewDelta = 0.02;
 float camViewLimit = 44;
 int lastMouseX = -1;
@@ -19,24 +20,87 @@ int lastMouseY = -1;
 float aspect = 1.7777f;
 float runSpeedUp = 2;
 
+bool play = true;
+bool antialiasing = true;
+
+float controlSpeed = 4;
+
 // Globals
 float alpha = 180;
 float alphaDelta = 1;
 
+float dayNightTime = 6;
+float dayNightSpeed = 0.5 * 1;
+float dayNightDistance = 500;
+
+float seaSpeed = 2;
+
+float skyVars[4] = { 0, 0, 0, 1 };
+// 1. MORNING
+// 2. DAY
+// 3. EVENING
+// 4. NIGHT
+
+
+// Materials
+vector<int> vecTree;
+vector<int> vecMount;
+vector<int> vecLight;
+
+float3 matTree[] = {
+    float3{158, 114, 250} *(1.0 / 255),
+    //float3{208, 207, 255} *(1.0 / 255),
+    //float3{114, 145, 203} *(1.0 / 255) * 1,
+    //float3{15, 126, 143} *(1.0 / 255) * 1,
+    float3{218, 222, 255} *(1.0 / 255),
+    float3{255, 166, 82} *(1.0 / 255),
+    {0.31, 0.25, 0.62},
+};
+
+float3 matMount[] = {
+    float3{224, 205, 255} *(1.0 / 255),
+    //float3{84, 123, 207} *(1.0 / 255),
+    float3{75, 111, 255} *(1.0 / 255),
+    //float3{208, 207, 255} *(1.0 / 255),
+    float3{255, 230, 103} *(1.0 / 255),
+    {0.02, 0.04, 0.09},
+};
+
+float3 matLake[] = {
+    float3{155, 4, 136} *(1.0 / 255),
+    float3{20, 143, 248} *(1.0 / 255) * 0.9,
+    //{0, 0, 0},
+    float3{255, 20, 20} *(1.0 / 255),
+    {0, 0, 0},
+};
+
+float3 matAmbient[] = {
+    float3{139, 129, 197} *(1.0 / 255),
+    float3{115, 136, 178} *(1.0 / 255) * 0.7,
+    float3{164, 132, 121} * (1.0 / 255),
+    { 0.1, 0.2, 0.4 },
+};
+
+//float3 ambient = float3{ 155, 152, 197 } * (1.0f / 255.0f); 0, 20, 80
+//float3 ambient = float3{ 0, 20, 80 } *(1.0f / 255.0f);
+float3 ambient = float3{ 0.1, 0.2, 0.4 };
+
+
 Object* objects;
 Light* lights;
 
-unsigned char* texture;
+unsigned char* texture1, *texture2, *texture3, *texture4;
 int texW;
 int texH;
 
 // declarations
 extern "C" void
-launch_cudaProcess(dim3 grid, dim3 block, int sbytes,
+launch_cudaProcess(
     unsigned int* g_odata,
     int imgw, int imgh,
-    Camera cam, float3 sun, Object * objectPositions, Light* lightPositions,
-    unsigned char* tex, int w, int h);
+    Camera cam, float3 sun, Object * objectPositions, Light * lightPositions, float3 ambient, float* skyVars,
+    unsigned char* h_tex1, unsigned char* h_tex2, unsigned char* h_tex3, unsigned char* h_tex4, int w, int h, float dayTime,
+    bool antialiasing);
 void cameraHelperAngles();
 
 float toRad(float angle) {
@@ -45,13 +109,13 @@ float toRad(float angle) {
 
 void initCamera() {
     cam = {
-        {-40, 10, 50}, // position
-        310, // horizontal angle
-        12, // vertical angle
+        {-56, 2.2, 72}, // position
+        309, // horizontal angle
+        -7.07, // vertical angle
         40 // field of view
     };
-    cam.horAngle = fmod(cam.horAngle + camViewDelta * 0 + 360.0f, 360.0f);
-    cam.verAngle = clamp(cam.verAngle + camViewDelta * 0, -camViewLimit, camViewLimit);
+    //cam.horAngle = fmod(cam.horAngle + camViewDelta * 0 + 360.0f, 360.0f);
+    //cam.verAngle = clamp(cam.verAngle + camViewDelta * 0, -camViewLimit, camViewLimit);
     cameraHelperAngles();
 }
 
@@ -68,14 +132,15 @@ void createSphere(int& i, float3 color, float mirror, float specular, float shin
     objects[i].shine = shine;
     objects[i].pos = pos;
     objects[i].size = { size, size, size };
+    objects[i].light = false;
     i++;
 }
 
 void createSnowman(int& i, float3 offset, float a) {
-    float3 color = { 1, 1, 1 };
+    float3 color = float3{ 1, 1, 1 } * 0.8;
     float mirror = 0;
-    float specular = 156;
-    float shine = 0;
+    float specular = 1;
+    float shine = 0.05;
     float3 pos = { 0, 0, 0 };
     float size = 1;
 
@@ -127,7 +192,7 @@ void createSnowman(int& i, float3 offset, float a) {
     createSphere(i, color, mirror, specular, shine, pos + offset, size);
 }
 
-void createPyramid(int& i, float3 color, float mirror, float specular, float shine, float3 pos, float base, float height) {
+void createPyramid(int& i, float3 color, float mirror, float specular, float shine, float3 pos, float base, float height, float angle) {
     float y = 0.86f;
     float x = 0.5f;
     float h = y * 2.0f / 3.0f;
@@ -153,10 +218,15 @@ void createPyramid(int& i, float3 color, float mirror, float specular, float shi
         {x, t, v}, // 3
     };
 
+    // center
     for (int k = 0; k < 4 * 3; k++) {
-        // center
         tris[k].x -= x;
         tris[k].z -= v;
+    }
+
+    for (int k = 0; k < 4 * 3; k++) {
+        // rotate
+        tris[k] = rotY(tris[k], toRad(angle));
         // scale
         tris[k].x *= base;
         tris[k].y *= height;
@@ -170,16 +240,16 @@ void createPyramid(int& i, float3 color, float mirror, float specular, float shi
             Primitive::TRIANGLE, shine, specular, mirror, color,
             tris[k * 3],
             tris[k * 3 + 1],
-            tris[k * 3 + 2]
+            tris[k * 3 + 2], false
         };
     }
 }
 
-void createTree(int& i, float3 offset) {
-    float3 color1 = { 1, 1, 1 };
-    float3 color2 = { 1, 0, 0 };
-    float mirror = 0;
-    float specular = 256;
+void createTree(int& i, float3 offset, float angle) {
+    float3 color1 = float3{ 100, 80, 200 } *(1.0f / 255.0f) * 0.8;
+    float3 color2 = { 0.5, 0, 0 };
+    float mirror = 0.1;
+    float specular = 1;
     float shine = 0;
     float3 pos = { 0, 0, 0 };
     float size = 1;
@@ -189,41 +259,50 @@ void createTree(int& i, float3 offset) {
     size = 2;
     float base = 7;
     float heigh = 19;
-    createPyramid(i, color1, mirror, specular, shine, pos + offset, base, heigh);
+    createPyramid(i, color1, mirror, specular, shine, pos + offset, base, heigh, angle);
+    vecTree.push_back(i - 1);
+    vecTree.push_back(i - 2);
+    vecTree.push_back(i - 3);
+    vecTree.push_back(i - 4);
 
     // DOWN
     pos = { 0, -2, 0 };
     size = 2;
     base = 4;
     heigh = 8;
-    createPyramid(i, color2, mirror, specular, shine, pos + offset, base, heigh);
+    createPyramid(i, color2, mirror, specular, shine, pos + offset, base, heigh, angle);
 }
 
 void createGround(int& i, float3 offset) {
     objects[i].type = Primitive::PLANE;
-    objects[i].color = { 1, 0.1, 1 };
-    objects[i].mirror = 0.4;
+    objects[i].color = float3{ 0, 0, 30 } *(1.0f / 255.0f);
+    objects[i].mirror = 0.6;
     objects[i].specular = 256;
     objects[i].shine = 0;
     objects[i].pos = offset;
     objects[i].size = { 0, 1, 0 };
+    objects[i].light = false;
     i++;
 }
 
-void createMountain(int& i, float3 offset, float size) {
-    float3 color = { 1, 1, 1 };
-    float mirror = 0.8;
+void createMountain(int& i, float3 offset, float size, float angle) {
+    float3 color = float3{ 18, 31, 60 } * (1.0f / 255.0f) * 0.4;
+    float mirror = 0;
     float specular = 256;
     float shine = 0;
 
     // UP
-    createPyramid(i, color, mirror, specular, shine, offset, size, 1.5f * size);
+    createPyramid(i, color, mirror, specular, shine, offset, size, 1.5f * size, angle);
+    vecMount.push_back(i - 1);
+    vecMount.push_back(i - 2);
+    vecMount.push_back(i - 3);
+    vecMount.push_back(i - 4);
 }
 
 void createIsland(int& i, float3 offset, float size, float d) {
-    float3 color = { 1, 1, 1 };
+    float3 color = float3{ 100, 80, 200 } *(1.0f / 255.0f) * 0.8;
     float mirror = 0.1;
-    float specular = 256;
+    float specular = 1;
     float shine = 0;
 
     float3 p[]{
@@ -273,20 +352,22 @@ void createIsland(int& i, float3 offset, float size, float d) {
     }
 
     for (int k = 0; k < 10; k++) {
+        vecTree.push_back(i);
         objects[i++] = {
             Primitive::TRIANGLE, shine, specular, mirror, color,
             tris[k * 3],
             tris[k * 3 + 1],
-            tris[k * 3 + 2]
+            tris[k * 3 + 2],
+            false
         };
     }
 }
 
 void createIgloo(int& i, float3 offset, float size1, float size2) {
-    float3 color = { 1, 1, 1 };
+    float3 color = float3{ 1, 1, 1 } * 0.8;
     float mirror = 0;
-    float specular = 256;
-    float shine = 0;
+    float specular = 1;
+    float shine = 0.05;
     float3 pos = { 0, 0, 0 };
     float size = 1;
 
@@ -299,6 +380,17 @@ void createIgloo(int& i, float3 offset, float size1, float size2) {
     createSphere(i, color, mirror, specular, shine, pos + offset, size2);
 }
 
+void createLightObjects(int& i) {
+    // sun
+    createSphere(i, { 1, 0.8, 0.05 }, 0, 0, 0, lights[0].pos, 50);
+    objects[i - 1].light = true;
+    vecLight.push_back(i - 1);
+    // moon
+    createSphere(i, { 0.9, 0.9, 1 }, 0, 0, 0, lights[1].pos, 50);
+    objects[i - 1].light = true;
+    vecLight.push_back(i - 1);
+}
+
 void initObjects() {
     objects = (Object*)malloc(sizeof(Object) * OBJECTS_NUMBER);
     int i = 0;
@@ -306,38 +398,41 @@ void initObjects() {
     float level = -4.5;
     
     createGround(i, { 0, level, 0 });
+    createIsland(i, { 0, -4, 0 }, 50, 2);
 
     createSnowman(i, { -4, -2, 17 }, toRad(-50));
     createSnowman(i, { -15, -2, 5 }, toRad(-20));
 
-    createTree(i, { -20, -2, -10 });
-    createTree(i, { -10, -2, -20 });
-    createTree(i, { 0, -2, -22 });
+    createTree(i, { -22, -2, -10 }, 90);
+    createTree(i, { -10, -2, -20 }, 90);
+    createTree(i, { 0, -2, -20 }, 80);
 
-    createTree(i, { 20, -2, 10 });
-    createTree(i, { 17, -2, 0 });
-    createTree(i, { 10, -2, 20 });
+    createTree(i, { 17, -2, 2 }, 90);
+    createTree(i, { 20, -2, 9 }, 80);
+    createTree(i, { 12, -2, 22 }, 70);
 
     // big mountains
     float d = 4;
-    createMountain(i, float3{170, level, 0 } *d, 100 * d);
-    createMountain(i, float3{ 90, level, -100 } *d, 100 * d);
-    createMountain(i, float3{ -35, level, -90 } *d, 100 * d);
-    createMountain(i, float3{ -120, level, 35 } *d, 100 * d);
-    createMountain(i, float3{ 5, level, 130 } *d, 100 * d);
-    createMountain(i, float3{ 130, level, 90 } *d, 100 * d);
+    createMountain(i, float3{170, level, 0 } *d, 100 * d, 0);
+    createMountain(i, float3{ 90, level, -100 } *d, 110 * d, 45);
+    createMountain(i, float3{ -35, level, -90 } *d, 100 * d, 0);
+    createMountain(i, float3{ -100, level, 65 } *d, 100 * d, 0); //sunset
+    createMountain(i, float3{ 25, level, 140 } *d, 100 * d, 0); //sunrise
+    createMountain(i, float3{ 130, level, 90 } *d, 100 * d, 0);
 
     // small mountains
-    createMountain(i, float3{ 100, level, 30 } *d, 70 * d);
-    createMountain(i, float3{ 100, level, -40 } *d, 50 * d);
-    createMountain(i, float3{ 20, level, -100 } *d, 70 * d);
-    createMountain(i, float3{ -80, level, -30 } *d, 70 * d);
-    createMountain(i, float3{ -70, level, 80 } *d, 70 * d);
-    createMountain(i, float3{ 60, level, 90 } *d, 50 * d);
+    createMountain(i, float3{ 100, level, 30 } *d, 70 * d, 0);
+    createMountain(i, float3{ 100, level, -40 } *d, 50 * d, 30);
+    createMountain(i, float3{ 20, level, -100 } *d, 70 * d, 0);
+    createMountain(i, float3{ -80, level, -40 } *d, 80 * d, 0); // sunset
+    createMountain(i, float3{ -70, level, 100 } *d, 90 * d, 0); //sunrise
+    createMountain(i, float3{ 60, level, 90 } *d, 50 * d, 0);
 
-    createIsland(i, { 0, -4, 0 }, 50, 2);
-
+    // igloo
     createIgloo(i, { 4, -4, -4 }, 10, 6);
+
+    // add lights
+    createLightObjects(i);
 
     printf("OBJECTS: %d\n", i);
 }
@@ -480,7 +575,10 @@ void oldStaticScene() {
 
 void initTexture() {
     int n;
-    texture = stbi_load("backgrounds/snow.jpg", &texW, &texH, &n, 4);
+    texture1 = stbi_load("backgrounds/morning.png", &texW, &texH, &n, 4);
+    texture2 = stbi_load("backgrounds/day.png", &texW, &texH, &n, 4);
+    texture3 = stbi_load("backgrounds/evening.png", &texW, &texH, &n, 4);
+    texture4 = stbi_load("backgrounds/night.png", &texW, &texH, &n, 4);
     printf("%d %d %d\n", texW, texH, n);
 }
 
@@ -491,16 +589,24 @@ void initLights() {
     {
         int i = 0;
         lights[i].color = { 1, 1, 1 };
-        lights[i].intensity = 1000;
-        lights[i].pos = { -30, 30, 30 };
+        lights[i].intensity = 1;
+        lights[i].pos = { 0, 0, 0 };
     }
 
     // MOON
     {
         int i = 1;
         lights[i].color = { 1, 1, 1 };
-        lights[i].intensity = 1000;
-        lights[i].pos = { -30, 30, -30 };
+        lights[i].intensity = 1;
+        lights[i].pos = { -1000, 1000, 1000 };
+    }
+
+    // FIRE
+    {
+        int i = 2;
+        lights[i].color = { 1, 1, 1 };
+        lights[i].intensity = 1000 * 0;
+        lights[i].pos = { -20, 15, 20 };
     }
 }
 
@@ -509,14 +615,16 @@ void initScene() {
     srand(time(NULL));
 
     initCamera();
-    initObjects();
     initLights();
+    initObjects();
     initTexture();
 }
 
-void launch(dim3 grid, dim3 block, unsigned int* out_data, int imgw, int imgh) {
+void launch(unsigned int* out_data, int imgw, int imgh) {
     aspect = (1.0f * imgw) / imgh;
-    launch_cudaProcess(grid, block, 0, out_data, imgw, imgh, cam, sunPos, objects, lights, texture, texW, texH);
+    float dayProgress = (dayNightTime / 24.0f);
+    launch_cudaProcess(out_data, imgw, imgh, cam, sunPos, objects, lights, ambient, skyVars, 
+        texture1, texture2, texture3, texture4, texW, texH, dayProgress, antialiasing);
 }
 
 void cameraHelperAngles() {
@@ -584,8 +692,7 @@ void moveCamera() {
     if (verMove || horMove || upMove) {
         camMove = normalize(camMove);
         cam.pos = cam.pos + camMove * (moveSpeed * run);
-
-        printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
+        //printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
     }
 }
 
@@ -594,9 +701,105 @@ void moveSun() {
     int horMove = (bool)GetAsyncKeyState(0x4C) - (bool)GetAsyncKeyState(0x4A);
     int upMove = (bool)GetAsyncKeyState(0x4F) - (bool)GetAsyncKeyState(0x55);
 
-    lights[0].pos.x += verMove;
-    lights[0].pos.z += horMove;
-    lights[0].pos.y += upMove;
+    lights[2].pos.x += verMove;
+    lights[2].pos.z += horMove;
+    lights[2].pos.y += upMove;
+}
+
+
+float3 getColorByTime(float3* mats) {
+    float3 c = { 0, 0, 0 };
+    for (int i = 0; i < 4; i++) {
+        c = c + mats[i] * skyVars[i];
+    }
+    return c;
+}
+
+void recolorObjects() {
+    // trees
+    for (int i = 0; i < vecTree.size(); i++) {
+        objects[vecTree[i]].color = getColorByTime(matTree);
+    }
+    // mountains
+    for (int i = 0; i < vecMount.size(); i++) {
+        objects[vecMount[i]].color = getColorByTime(matMount);
+    }
+    // lake
+    objects[0].color = getColorByTime(matLake);
+    // ambient
+    ambient = getColorByTime(matAmbient);
+}
+
+void controls() {
+    // time control
+    int timeControl = (bool)GetAsyncKeyState(VK_RIGHT) - (bool)GetAsyncKeyState(VK_LEFT);
+    if (timeControl) {
+        dayNightTime = fmodf(dayNightTime + dayNightSpeed * deltaTime * timeControl * controlSpeed + 24, 24);
+    }
+    else if (play) {
+        dayNightTime = fmodf(dayNightTime + dayNightSpeed * deltaTime + 24, 24);
+    }
+
+    // play/pause
+    if ((bool)GetAsyncKeyState(0x50)) {
+        play = true;
+    }
+    if ((bool)GetAsyncKeyState(0x4F)) {
+        play = false;
+        printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
+    }
+
+    
+
+    // sea control
+    int seaControl = (bool)GetAsyncKeyState(VK_UP) - (bool)GetAsyncKeyState(VK_DOWN);
+    objects[0].pos.y += seaControl * seaSpeed * deltaTime;
+
+    // time of day control
+    bool change = false;
+    if ((bool)GetAsyncKeyState(0x31)) {
+        dayNightTime = 6; // morning
+        change = true;
+    }
+    if ((bool)GetAsyncKeyState(0x32)) {
+        dayNightTime = 14; // day
+        change = true;
+    }
+    if ((bool)GetAsyncKeyState(0x33)) {
+        dayNightTime = 18; // evening
+        change = true;
+    }
+    if ((bool)GetAsyncKeyState(0x34)) {
+        dayNightTime = 1; // night
+        change = true;
+    }
+
+    // print time
+    if (timeControl || change || play) {
+        printf("TIME: %02d:%02d\n", (int)dayNightTime, (int)(((int)(dayNightTime * 100) % 100) / 100.0 * 60));
+    }
+
+    // set camera to scene
+    if ((bool)GetAsyncKeyState(0x35)) {
+        // main scene
+        cam.pos = { -56, 2.2, 72 };
+        cam.horAngle = 309;
+        cam.verAngle = -7.07;
+    }
+    if ((bool)GetAsyncKeyState(0x36)) {
+        // day cycle
+        cam.pos = { 324.4, 12.41, -84 };
+        cam.horAngle = 141.2;
+        cam.verAngle = -12.65;
+    }
+
+    // antialiasing
+    if ((bool)GetAsyncKeyState(0x42)) {
+        antialiasing = true;
+    }
+    if ((bool)GetAsyncKeyState(0x56)) {
+        antialiasing = false;
+    }
 }
 
 void animate() {
@@ -629,12 +832,63 @@ void animate() {
 
     moveCamera();
     moveSun();
-    
+    controls();
+
     // reset
     bool reset = (GetKeyState(0x52) & 0x8000);
     if (reset) {
         //initObjects();
     }
 
+    recolorObjects();
+
+    //return;
+
+    // lights position
+    float a = toRad(fmodf((dayNightTime / 24.0f) * 360 - 120, 360));
+    // rotate
+    lights[0].pos = rotY(float3{ cosf(a), sinf(a), 0 } * dayNightDistance, toRad(-45));
+    lights[1].pos = lights[0].pos * -1;
+    // move
+    float o = 500;
+    float3 offset = { -o, 0, o };
+    lights[0].pos = lights[0].pos + offset;
+    lights[1].pos = lights[1].pos + offset;
+    // object
+    objects[vecLight[0]].pos = lights[0].pos;
+    objects[vecLight[1]].pos = lights[1].pos;
+    // light intensity
+    float val = fabs(lights[0].pos.y) / dayNightDistance;
+    lights[0].color = float3{ 1, 1, 1 } * val;
+    lights[1].color = lights[0].color * 1;
+    //printf("val:%f \n", val);
+
+    //printf("DAY: %f A: %f\n", dayNightTime, a);
+
+    // calculate sky vars
+    for (int i = 0; i < 4; i++) skyVars[i] = 0;
+
+    float d = dayNightTime;
+    if (d >= 6 && d <= 8) skyVars[0] = 1; // morning
+    if (d >= 10 && d <= 16) skyVars[1] = 1; // day
+    if (d >= 18 && d <= 20) skyVars[2] = 1; // evening
+    if (d >= 22 || d <= 4) skyVars[3] = 1; // night
+
+    if (d > 8 && d < 10) {
+        skyVars[1] = (d - 8) / 2;
+        skyVars[0] = 1.0f - skyVars[1];
+    }
+    if (d > 16 && d < 18) {
+        skyVars[2] = (d - 16) / 2;
+        skyVars[1] = 1.0f - skyVars[2];
+    }
+    if (d > 20 && d < 22) {
+        skyVars[3] = (d - 20) / 2;
+        skyVars[2] = 1.0f - skyVars[3];
+    }
+    if (d > 4 && d < 6) {
+        skyVars[0] = (d - 4) / 2;
+        skyVars[3] = 1.0f - skyVars[0];
+    }
 }
 

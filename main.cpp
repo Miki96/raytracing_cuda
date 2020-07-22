@@ -58,7 +58,7 @@ unsigned int image_width = width * factor;
 unsigned int image_height = height * factor;
 int iGLUTWindowHandle = 0;  // handle to the GLUT window
 
-const int blockDim = 16;
+const int blockDim = 32;
 
 // delta time
 int timeStart = 0;
@@ -191,7 +191,7 @@ void generateCUDAImage()
     // execute CUDA kernel
     
 
-    launch(grid, block, out_data, image_width, image_height);
+    launch(out_data, image_width, image_height);
 
 
     // CUDA generated data in cuda memory or in a mapped PBO made of BGRA 8 bits
