@@ -9,71 +9,56 @@
 #include <transforms.h>
 #include <vector>
 
-float3 sunPos = { -1, -1, -1 };
-
+// Camera control
 Camera cam;
 float moveSpeed = 0.3f * 2;
 float camViewDelta = 0.02;
 float camViewLimit = 44;
 int lastMouseX = -1;
 int lastMouseY = -1;
-float aspect = 1.7777f;
 float runSpeedUp = 2;
-
-bool play = true;
-bool antialiasing = true;
-
-float controlSpeed = 4;
+float aspect = 1.7777f;
 
 // Globals
-float alpha = 180;
-float alphaDelta = 1;
+bool play = true;
+bool antialiasing = true;
+float seaSpeed = 2;
+char timeDay[5];
 
+// Day & Night cycle
 float dayNightTime = 6;
 float dayNightSpeed = 0.5 * 1;
 float dayNightDistance = 500;
-
-float seaSpeed = 2;
-
-float skyVars[4] = { 0, 0, 0, 1 };
+float datNightControlSpeed = 4;
 // 1. MORNING
 // 2. DAY
 // 3. EVENING
 // 4. NIGHT
-
+float skyVars[4] = { 0, 0, 0, 1 };
 
 // Materials
 vector<int> vecTree;
 vector<int> vecMount;
 vector<int> vecLight;
-
+float3 ambient = float3{ 0.1, 0.2, 0.4 };
 float3 matTree[] = {
     float3{158, 114, 250} *(1.0 / 255),
-    //float3{208, 207, 255} *(1.0 / 255),
-    //float3{114, 145, 203} *(1.0 / 255) * 1,
-    //float3{15, 126, 143} *(1.0 / 255) * 1,
     float3{218, 222, 255} *(1.0 / 255),
     float3{255, 166, 82} *(1.0 / 255),
     {0.31, 0.25, 0.62},
 };
-
 float3 matMount[] = {
     float3{224, 205, 255} *(1.0 / 255),
-    //float3{84, 123, 207} *(1.0 / 255),
     float3{75, 111, 255} *(1.0 / 255),
-    //float3{208, 207, 255} *(1.0 / 255),
     float3{255, 230, 103} *(1.0 / 255),
     {0.02, 0.04, 0.09},
 };
-
 float3 matLake[] = {
     float3{155, 4, 136} *(1.0 / 255),
     float3{20, 143, 248} *(1.0 / 255) * 0.9,
-    //{0, 0, 0},
     float3{255, 20, 20} *(1.0 / 255),
     {0, 0, 0},
 };
-
 float3 matAmbient[] = {
     float3{139, 129, 197} *(1.0 / 255),
     float3{115, 136, 178} *(1.0 / 255) * 0.7,
@@ -81,30 +66,100 @@ float3 matAmbient[] = {
     { 0.1, 0.2, 0.4 },
 };
 
-//float3 ambient = float3{ 155, 152, 197 } * (1.0f / 255.0f); 0, 20, 80
-//float3 ambient = float3{ 0, 20, 80 } *(1.0f / 255.0f);
-float3 ambient = float3{ 0.1, 0.2, 0.4 };
-
-
+// Lights and Models
 Object* objects;
 Light* lights;
 
+// Textures
 unsigned char* texture1, *texture2, *texture3, *texture4;
 int texW;
 int texH;
 
-// declarations
+// Declarations
 extern "C" void
-launch_cudaProcess(
+launchKernel(
     unsigned int* g_odata,
     int imgw, int imgh,
-    Camera cam, float3 sun, Object * objectPositions, Light * lightPositions, float3 ambient, float* skyVars,
+    Camera cam, Object * objectPositions, Light * lightPositions, float3 ambient, float* skyVars,
     unsigned char* h_tex1, unsigned char* h_tex2, unsigned char* h_tex3, unsigned char* h_tex4, int w, int h, float dayTime,
     bool antialiasing);
-void cameraHelperAngles();
+
+// HELPER FUNCTIONS
 
 float toRad(float angle) {
     return (PI / 180.0f) * angle;
+}
+
+char* getTime()
+{
+    return timeDay;
+}
+
+// CAMERA FUNCTIONS
+
+void cameraHelperAngles() {
+    float dirRad = toRad(cam.horAngle);
+    cam.dir = { cos(dirRad), 0, sin(dirRad) };
+
+    float a = toRad(cam.fov / 2.0);
+    float h = tan(a);
+    float w = h * aspect;
+
+    cam.LD = { 1, -h, -w };
+    cam.RD = { 1, -h, w };
+    cam.LU = { 1, h, -w };
+    cam.RU = { 1, h, w };
+
+    // rotate ver
+    float av = toRad(-cam.verAngle);
+    cam.LD = rotZ(cam.LD, av);
+    cam.RD = rotZ(cam.RD, av);
+    cam.LU = rotZ(cam.LU, av);
+    cam.RU = rotZ(cam.RU, av);
+
+    // rotate hor
+    float ah = toRad(-cam.horAngle);
+    cam.LD = rotY(cam.LD, ah);
+    cam.RD = rotY(cam.RD, ah);
+    cam.LU = rotY(cam.LU, ah);
+    cam.RU = rotY(cam.RU, ah);
+}
+
+void mouseMotion(int x, int y, int windowWidth, int windowHeight) {
+    if (lastMouseX != -1 && lastMouseX != -1) {
+        int deltaX = x - lastMouseX;
+        int deltaY = y - lastMouseY;
+
+        // rotate camera
+        cam.horAngle = fmod(cam.horAngle + camViewDelta * deltaX + 360.0f, 360.0f);
+        cam.verAngle = clamp(cam.verAngle + camViewDelta * deltaY, -camViewLimit, camViewLimit);
+        cameraHelperAngles();
+    }
+    lastMouseX = windowWidth / 2;
+    lastMouseY = windowHeight / 2;
+}
+
+void moveCamera() {
+    // move cam
+    float3 camMove = { 0, 0, 0 };
+    float3 camForw = cam.dir;
+    float3 camUp = { 0, 1, 0 };
+    float3 camSide = { -cam.dir.z, 0, cam.dir.x };
+
+    int verMove = (bool)GetAsyncKeyState(0x44) - (bool)GetAsyncKeyState(0x41);
+    camMove = camMove + camSide * verMove;
+    int horMove = (bool)GetAsyncKeyState(0x57) - (bool)GetAsyncKeyState(0x53);
+    camMove = camMove + camForw * horMove;
+    int upMove = (bool)GetAsyncKeyState(0x51) - (bool)GetAsyncKeyState(0x45);
+    camMove = camMove + camUp * upMove;
+    // run
+    float run = (bool)GetAsyncKeyState(VK_SHIFT) ? runSpeedUp : 1;
+
+    if (verMove || horMove || upMove) {
+        camMove = normalize(camMove);
+        cam.pos = cam.pos + camMove * (moveSpeed * run);
+        //printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
+    }
 }
 
 void initCamera() {
@@ -114,15 +169,10 @@ void initCamera() {
         -7.07, // vertical angle
         40 // field of view
     };
-    //cam.horAngle = fmod(cam.horAngle + camViewDelta * 0 + 360.0f, 360.0f);
-    //cam.verAngle = clamp(cam.verAngle + camViewDelta * 0, -camViewLimit, camViewLimit);
     cameraHelperAngles();
 }
 
-// spin temp vars
-float dist[] = { 0, 0, 0, 0, 0 };
-float angle[] = { 110, 80, 90, 70, 60 };
-float speed[] = { -0.015, 0.01, -0.02, 0.005, -0.012 };
+// SCENE FUNCTIONS
 
 void createSphere(int& i, float3 color, float mirror, float specular, float shine, float3 pos, float size) {
     objects[i].type = Primitive::SPHERE;
@@ -504,7 +554,7 @@ void oldStaticScene() {
         objects[i].pos.y = -4;
         objects[i].pos.z = 0;
         // color
-        rgb c = hsv2rgb({ (double)(rand() % 360), 0.9, 0.9 });
+        //rgb c = hsv2rgb({ (double)(rand() % 360), 0.9, 0.9 });
         objects[i].color.x = 1;
         objects[i].color.y = 1;
         objects[i].color.z = 1;
@@ -579,7 +629,6 @@ void initTexture() {
     texture2 = stbi_load("backgrounds/day.png", &texW, &texH, &n, 4);
     texture3 = stbi_load("backgrounds/evening.png", &texW, &texH, &n, 4);
     texture4 = stbi_load("backgrounds/night.png", &texW, &texH, &n, 4);
-    printf("%d %d %d\n", texW, texH, n);
 }
 
 void initLights() {
@@ -590,7 +639,7 @@ void initLights() {
         int i = 0;
         lights[i].color = { 1, 1, 1 };
         lights[i].intensity = 1;
-        lights[i].pos = { 0, 0, 0 };
+        lights[i].pos = { -1000, 1000, 1000 };
     }
 
     // MOON
@@ -599,14 +648,6 @@ void initLights() {
         lights[i].color = { 1, 1, 1 };
         lights[i].intensity = 1;
         lights[i].pos = { -1000, 1000, 1000 };
-    }
-
-    // FIRE
-    {
-        int i = 2;
-        lights[i].color = { 1, 1, 1 };
-        lights[i].intensity = 1000 * 0;
-        lights[i].pos = { -20, 15, 20 };
     }
 }
 
@@ -620,92 +661,7 @@ void initScene() {
     initTexture();
 }
 
-void launch(unsigned int* out_data, int imgw, int imgh) {
-    aspect = (1.0f * imgw) / imgh;
-    float dayProgress = (dayNightTime / 24.0f);
-    launch_cudaProcess(out_data, imgw, imgh, cam, sunPos, objects, lights, ambient, skyVars, 
-        texture1, texture2, texture3, texture4, texW, texH, dayProgress, antialiasing);
-}
-
-void cameraHelperAngles() {
-    float rad = PI / 180.0f;
-
-    float dirRad = rad * cam.horAngle;
-    cam.dir = { cos(dirRad), 0, sin(dirRad) };
-
-    float a = rad * cam.fov / 2.0;
-    //float w = tan(a);
-    //float h = w / aspect;
-    float h = tan(a);
-    float w = h * aspect;
-
-    cam.LD = { 1, -h, -w };
-    cam.RD = { 1, -h, w };
-    cam.LU = { 1, h, -w };
-    cam.RU = { 1, h, w };
-
-    // rotate ver
-    float av = rad * (-cam.verAngle);
-    cam.LD = rotZ(cam.LD, av);
-    cam.RD = rotZ(cam.RD, av);
-    cam.LU = rotZ(cam.LU, av);
-    cam.RU = rotZ(cam.RU, av);
-
-    // rotate hor
-    float ah = rad * (-cam.horAngle);
-    cam.LD = rotY(cam.LD, ah);
-    cam.RD = rotY(cam.RD, ah);
-    cam.LU = rotY(cam.LU, ah);
-    cam.RU = rotY(cam.RU, ah);
-}
-
-void mouseMotion(int x, int y, int windowWidth, int windowHeight) {
-    if (lastMouseX != -1 && lastMouseX != -1) {
-        int deltaX = x - lastMouseX;
-        int deltaY = y - lastMouseY;
-
-        // rotate camera
-        cam.horAngle = fmod(cam.horAngle + camViewDelta * deltaX + 360.0f, 360.0f);
-        cam.verAngle = clamp(cam.verAngle + camViewDelta * deltaY, -camViewLimit, camViewLimit);
-        cameraHelperAngles();
-    }
-    lastMouseX = windowWidth / 2;
-    lastMouseY = windowHeight / 2;
-}
-
-void moveCamera() {
-    // move cam
-    float3 camMove = { 0, 0, 0 };
-    float3 camForw = cam.dir;
-    float3 camUp = { 0, 1, 0 };
-    float3 camSide = { -cam.dir.z, 0, cam.dir.x };
-
-    int verMove = (bool)GetAsyncKeyState(0x44) - (bool)GetAsyncKeyState(0x41);
-    camMove = camMove + camSide * verMove;
-    int horMove = (bool)GetAsyncKeyState(0x57) - (bool)GetAsyncKeyState(0x53);
-    camMove = camMove + camForw * horMove;
-    int upMove = (bool)GetAsyncKeyState(0x51) - (bool)GetAsyncKeyState(0x45);
-    camMove = camMove + camUp * upMove;
-    // run
-    float run = (bool)GetAsyncKeyState(VK_SHIFT) ? runSpeedUp : 1;
-
-    if (verMove || horMove || upMove) {
-        camMove = normalize(camMove);
-        cam.pos = cam.pos + camMove * (moveSpeed * run);
-        //printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
-    }
-}
-
-void moveSun() {
-    int verMove = (bool)GetAsyncKeyState(0x49) - (bool)GetAsyncKeyState(0x4B);
-    int horMove = (bool)GetAsyncKeyState(0x4C) - (bool)GetAsyncKeyState(0x4A);
-    int upMove = (bool)GetAsyncKeyState(0x4F) - (bool)GetAsyncKeyState(0x55);
-
-    lights[2].pos.x += verMove;
-    lights[2].pos.z += horMove;
-    lights[2].pos.y += upMove;
-}
-
+// ANIMATION FUNCTIONS
 
 float3 getColorByTime(float3* mats) {
     float3 c = { 0, 0, 0 };
@@ -734,7 +690,7 @@ void controls() {
     // time control
     int timeControl = (bool)GetAsyncKeyState(VK_RIGHT) - (bool)GetAsyncKeyState(VK_LEFT);
     if (timeControl) {
-        dayNightTime = fmodf(dayNightTime + dayNightSpeed * deltaTime * timeControl * controlSpeed + 24, 24);
+        dayNightTime = fmodf(dayNightTime + dayNightSpeed * deltaTime * timeControl * datNightControlSpeed + 24, 24);
     }
     else if (play) {
         dayNightTime = fmodf(dayNightTime + dayNightSpeed * deltaTime + 24, 24);
@@ -746,10 +702,7 @@ void controls() {
     }
     if ((bool)GetAsyncKeyState(0x4F)) {
         play = false;
-        printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
     }
-
-    
 
     // sea control
     int seaControl = (bool)GetAsyncKeyState(VK_UP) - (bool)GetAsyncKeyState(VK_DOWN);
@@ -776,7 +729,7 @@ void controls() {
 
     // print time
     if (timeControl || change || play) {
-        printf("TIME: %02d:%02d\n", (int)dayNightTime, (int)(((int)(dayNightTime * 100) % 100) / 100.0 * 60));
+        sprintf(timeDay, "%02d:%02d\n", (int)dayNightTime, (int)(((int)(dayNightTime * 100) % 100) / 100.0 * 60));
     }
 
     // set camera to scene
@@ -802,69 +755,27 @@ void controls() {
     }
 }
 
-void animate() {
-    // spin
-
-    /*const float a = (3.14 / 180.0) * alpha;
-    sunPos.x = sin(a);
-    sunPos.z = cos(a);
-    alpha = fmod(alpha + alphaDelta, 360.0);*/
-
-    float del = 0.02;
-    /*objects[0].pos.x += del;
-    objects[0].pos.z += del / 2;
-
-    objects[1].pos.x += -del / 2;*/
-    //objects[1].pos.z += -del / 2;
-
-    // move objects
-
-
-    //objects[0].pos.x += del;
-    /*const float rad = PI / 180.0f;
-    for (int i = 0; i < 5; i++) {
-        angle[i] = fmod(angle[i] + speed[i], 360.0f);
-        float3 v = { cos(angle[i] * rad), 0, -sin(angle[i] * rad) };
-        v = v * dist[i];
-        v.y = objects[i].pos.y;
-        objects[i].pos = v;
-    }*/
-
-    moveCamera();
-    moveSun();
-    controls();
-
-    // reset
-    bool reset = (GetKeyState(0x52) & 0x8000);
-    if (reset) {
-        //initObjects();
-    }
-
-    recolorObjects();
-
-    //return;
-
+void moveLights() {
     // lights position
     float a = toRad(fmodf((dayNightTime / 24.0f) * 360 - 120, 360));
     // rotate
-    lights[0].pos = rotY(float3{ cosf(a), sinf(a), 0 } * dayNightDistance, toRad(-45));
+    lights[0].pos = rotY(float3{ cosf(a), sinf(a), 0 } *dayNightDistance, toRad(-45));
     lights[1].pos = lights[0].pos * -1;
     // move
     float o = 500;
     float3 offset = { -o, 0, o };
     lights[0].pos = lights[0].pos + offset;
     lights[1].pos = lights[1].pos + offset;
-    // object
+    // move objects
     objects[vecLight[0]].pos = lights[0].pos;
     objects[vecLight[1]].pos = lights[1].pos;
     // light intensity
     float val = fabs(lights[0].pos.y) / dayNightDistance;
-    lights[0].color = float3{ 1, 1, 1 } * val;
+    lights[0].color = float3{ 1, 1, 1 } *val;
     lights[1].color = lights[0].color * 1;
-    //printf("val:%f \n", val);
+}
 
-    //printf("DAY: %f A: %f\n", dayNightTime, a);
-
+void calcSkyVars() {
     // calculate sky vars
     for (int i = 0; i < 4; i++) skyVars[i] = 0;
 
@@ -892,3 +803,23 @@ void animate() {
     }
 }
 
+void animate() {
+    // move player camera
+    moveCamera();
+    // read controls input
+    controls();
+    // change colors based on time
+    recolorObjects();
+    calcSkyVars();
+    // change sun and moon position
+    moveLights();
+}
+
+// KERNEL LAUNCH
+
+void launch(unsigned int* out_data, int imgw, int imgh) {
+    aspect = (1.0f * imgw) / imgh;
+    float dayProgress = (dayNightTime / 24.0f);
+    launchKernel(out_data, imgw, imgh, cam, objects, lights, ambient, skyVars,
+        texture1, texture2, texture3, texture4, texW, texH, dayProgress, antialiasing);
+}

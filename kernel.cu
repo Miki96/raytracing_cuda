@@ -21,8 +21,7 @@ texture<uchar4, 2, cudaReadModeElementType> tex2;
 texture<uchar4, 2, cudaReadModeElementType> tex3;
 texture<uchar4, 2, cudaReadModeElementType> tex4;
 bool init = false;
-// helper
-__device__ unsigned int* baseImage;
+__device__ unsigned int* baseImage; // helper buffer
 
 __device__ int inline rgbToInt(float r, float g, float b)
 {
@@ -38,7 +37,6 @@ __device__ void inline intToRgb(int c, int &r, int &g, int &b)
     g = (c >> 8) & 255;
     r = c & 255;
 }
-
 
 __device__ bool inline checkHit(const Ray& ray, int index, float3& hitPos, float3& hitNormal, float& hitDist) {
 
@@ -131,7 +129,7 @@ __device__ bool inline checkHit(const Ray& ray, int index, float3& hitPos, float
 }
 
 template<int depth>
-__device__ float3 inline trace(const Ray& ray, const float3& sun) {
+__device__ float3 inline trace(const Ray& ray) {
 
     float minHitDist = -1;
     float3 minHitPos;
@@ -194,7 +192,6 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun) {
                 }
             }
 
-//            phongColor = phongColor + (o.color | l.color) * ((angle * l.intensity) / (shadowDist * shadowDist));
             phongColor = phongColor + (o.color | l.color) * ((angle * l.intensity) / 1);
 
             // specular
@@ -214,7 +211,7 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun) {
         if (kR > 0) {
             Ray reflection = { minHitPos, normalize(ray.dir - 2 * (minHitNormal * ray.dir) * minHitNormal) };
             reflection.origin = reflection.origin + reflection.dir * 0.001;
-            refColor = trace<depth + 1>(reflection, sun);
+            refColor = trace<depth + 1>(reflection);
         }
 
         // result
@@ -223,13 +220,13 @@ __device__ float3 inline trace(const Ray& ray, const float3& sun) {
 }
 
 template<>
-__device__ float3 inline trace<MAX_DEPTH + 1>(const Ray& ray, const float3& sun) {
+__device__ float3 inline trace<MAX_DEPTH + 1>(const Ray& ray) {
     return { 0, 0, 0 };
 }
 
-// GPU
+// Raytracing
 __global__ void
-raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun)
+raytracing(unsigned int* image, int imgw, int imgh, Camera cam)
 {
     // get location
     int tx = threadIdx.x;
@@ -242,9 +239,6 @@ raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun)
     // exit if out of image
     if (x >= imgw || y >= imgh) return;
     float aspect = (1.0 * imgw) / imgh;
-
-    // position sun
-    sun = normalize(sun);
 
     // create camera ray
     float partX = (float)x / (float)(imgw - 1);
@@ -259,72 +253,9 @@ raytracing(unsigned int* image, int imgw, int imgh, Camera cam, float3 sun)
     };
 
     // color pixel
-    float3 c = trace<0>(ray, sun) * 255;
+    float3 c = trace<0>(ray) * 255;
     image[y * imgw + x] = rgbToInt(c.x, c.y, c.z);
     return;
-}
-
-// Antialiasing SuperSampling
-__global__ void
-antialiasingOld(unsigned int* image, int imgw, int imgh)
-{
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int bw = blockDim.x;
-    int bh = blockDim.y;
-
-    int x = blockIdx.x * bw + tx;
-    int y = blockIdx.y * bh + ty;
-
-    if (x >= imgw || y >= imgh) return;
-
-    //__shared__ unsigned int blockData[32][32];
-    // read
-    //blockData[tx][ty] = g_odata[y * imgw + x];
-    //__syncthreads();
-
-    // calc
-
-    int rgb[9][3];
-    float r = 0, g = 0, b = 0;
-    if (x + 1 < imgw && y + 1 < imgh && x > 0 && y > 0 && tx != 0 && ty != 0 && tx != bw-1 && ty != bh-1) {
-        
-        /*intToRgb(blockData[tx][ty], rgb[0][0], rgb[0][1], rgb[0][2]);
-        intToRgb(blockData[tx][ty+1], rgb[1][0], rgb[1][1], rgb[1][2]);
-        intToRgb(blockData[tx][ty-1], rgb[2][0], rgb[2][1], rgb[2][2]);
-        intToRgb(blockData[tx+1][ty], rgb[3][0], rgb[3][1], rgb[3][2]);
-        intToRgb(blockData[tx+1][ty+1], rgb[4][0], rgb[4][1], rgb[4][2]);
-        intToRgb(blockData[tx+1][ty-1], rgb[5][0], rgb[5][1], rgb[5][2]);
-        intToRgb(blockData[tx-1][ty], rgb[6][0], rgb[6][1], rgb[6][2]);
-        intToRgb(blockData[tx-1][ty+1], rgb[7][0], rgb[7][1], rgb[7][2]);
-        intToRgb(blockData[tx-1][ty-1], rgb[8][0], rgb[8][1], rgb[8][2]);*/
-
-        intToRgb(image[(y + 0) * imgw + x - 1], rgb[0][0], rgb[0][1], rgb[0][2]);
-        intToRgb(image[(y + 0) * imgw + x + 0], rgb[1][0], rgb[1][1], rgb[1][2]);
-        intToRgb(image[(y + 0) * imgw + x + 1], rgb[2][0], rgb[2][1], rgb[2][2]);
-        intToRgb(image[(y - 1) * imgw + x - 1], rgb[3][0], rgb[3][1], rgb[3][2]);
-        intToRgb(image[(y - 1) * imgw + x + 0], rgb[4][0], rgb[4][1], rgb[4][2]);
-        intToRgb(image[(y - 1) * imgw + x + 1], rgb[5][0], rgb[5][1], rgb[5][2]);
-        intToRgb(image[(y + 1) * imgw + x - 1], rgb[6][0], rgb[6][1], rgb[6][2]);
-        intToRgb(image[(y + 1) * imgw + x + 0], rgb[7][0], rgb[7][1], rgb[7][2]);
-        intToRgb(image[(y + 1) * imgw + x + 1], rgb[8][0], rgb[8][1], rgb[8][2]);
-
-        float k = 9;
-
-        for (int i = 0; i < k; i++) {
-            r += rgb[i][0];
-            g += rgb[i][1];
-            b += rgb[i][2];
-        }
-        r /= k;
-        g /= k;
-        b /= k;
-
-        image[y * imgw + x] = rgbToInt(r, g, b);
-    }
-
-    //intToRgb(g_odata[(y) * imgw + x], r, g, b);
-    //g_odata[y * imgw + x] = rgbToInt(r, g, b);
 }
 
 // Antialiasing FXAA
@@ -465,11 +396,11 @@ antialiasing(unsigned int* image, unsigned int* result, int imgw, int imgh, bool
     }
 }
 
-// launcher
+// Main Kernel
 extern "C" void
-launch_cudaProcess(
-                   unsigned int *g_odata,
-                   int imgw, int imgh, Camera cam, float3 sun, Object *objects, Light * lights, float3 ambient, float* h_skyVars,
+launchKernel(
+                   unsigned int *result,
+                   int imgw, int imgh, Camera cam, Object *objects, Light * lights, float3 ambient, float* h_skyVars,
                    unsigned char* h_tex1, unsigned char* h_tex2, unsigned char* h_tex3, unsigned char* h_tex4, int w, int h,
                    float h_dayTime, bool alias)
 {
@@ -518,9 +449,9 @@ launch_cudaProcess(
     dim3 block(BLOCK_SIZE, BLOCK_SIZE, 1);
     dim3 grid(imgw / block.x + 1, imgh / block.y + 1, 1);
     // raytracing
-    raytracing<<< grid, block >>>(baseImage, imgw, imgh, cam, sun);
+    raytracing<<< grid, block >>>(baseImage, imgw, imgh, cam);
     getLastCudaError("Error raytracing\n");
-    antialiasing<<< grid, block >>> (baseImage, g_odata, imgw, imgh, alias); 
+    antialiasing<<< grid, block >>> (baseImage, result, imgw, imgh, alias); 
     getLastCudaError("Error antialiasing\n");
 }
 
