@@ -11,7 +11,7 @@
 
 // Camera control
 Camera cam;
-float moveSpeed = 0.3f * 2;
+float moveSpeed = 50;
 float camViewDelta = 0.02;
 float camViewLimit = 44;
 int lastMouseX = -1;
@@ -157,7 +157,7 @@ void moveCamera() {
 
     if (verMove || horMove || upMove) {
         camMove = normalize(camMove);
-        cam.pos = cam.pos + camMove * (moveSpeed * run);
+        cam.pos = cam.pos + camMove * (moveSpeed * run) * deltaTime;
         //printf("CAM: %f %f %f VIEW: %f %f\n", cam.pos.x, cam.pos.y, cam.pos.z, cam.horAngle, cam.verAngle);
     }
 }
@@ -822,4 +822,5 @@ void launch(unsigned int* out_data, int imgw, int imgh) {
     float dayProgress = (dayNightTime / 24.0f);
     launchKernel(out_data, imgw, imgh, cam, objects, lights, ambient, skyVars,
         texture1, texture2, texture3, texture4, texW, texH, dayProgress, antialiasing);
+    cudaDeviceSynchronize();
 }

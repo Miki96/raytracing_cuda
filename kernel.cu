@@ -277,6 +277,12 @@ antialiasing(unsigned int* image, unsigned int* result, int imgw, int imgh, bool
         return;
     }
 
+    // show egdes
+    /*if (tx == 0 || ty == 0 || tx == bw-1 || ty == bh-1) {
+        result[y * imgw + x] = rgbToInt(250, 0, 0);
+        return;
+    }*/
+
     __shared__ float block[32 + 2][32 + 2];
 
     // threshhold
@@ -447,7 +453,7 @@ launchKernel(
 
     // grid
     dim3 block(BLOCK_SIZE, BLOCK_SIZE, 1);
-    dim3 grid(imgw / block.x + 1, imgh / block.y + 1, 1);
+    dim3 grid((imgw + block.x - 1) / block.x, (imgh + block.y - 1) / block.y, 1);
     // raytracing
     raytracing<<< grid, block >>>(baseImage, imgw, imgh, cam);
     getLastCudaError("Error raytracing\n");

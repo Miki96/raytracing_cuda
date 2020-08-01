@@ -164,6 +164,14 @@ void generateCUDAImage()
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 }
 
+// display current time
+void drawTime() {
+    glRasterPos2f(0.9, -0.92);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    string text(getTime());
+    glutBitmapString(GLUT_BITMAP_HELVETICA_18, (const unsigned char*)text.c_str());
+}
+
 // display image to the screen as textured quad
 void displayImage(GLuint texture)
 {
@@ -197,16 +205,14 @@ void displayImage(GLuint texture)
 
     glDisable(GL_TEXTURE_2D);
 
-    // draw text
-    glRasterPos2f(0.9, -0.92);
-    glColor3f(1.0f, 1.0f, 1.0f);
-    string text(getTime());
-    glutBitmapString(GLUT_BITMAP_HELVETICA_18, (const unsigned char*)text.c_str());
+    //drawTime();
 
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
     SDK_CHECK_ERROR_GL();
 }
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Display callback
